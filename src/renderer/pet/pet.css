@@ -1,0 +1,146 @@
+/* 桌宠窗口：整窗透明，只有考拉和飘字是可见的。
+   任何时候都不要给 body 加背景色——那会在桌面上留下一个方块。 */
+:root {
+  --koala-h: 220px;
+  --stage-bottom: 18px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  /* 桌宠不是文档，禁掉选中和原生拖拽，否则拖动时会拖出图片幽灵 */
+  user-select: none;
+  -webkit-user-drag: none;
+  cursor: default;
+}
+
+#anchor {
+  position: absolute;
+  left: 50%;
+  bottom: var(--stage-bottom);
+  transform: translateX(-50%);
+}
+
+#stage {
+  position: relative;
+  width: var(--koala-w);
+  height: var(--koala-h);
+  transform: scale(var(--koala-scale, 1));
+  transform-origin: 50% 100%;
+}
+
+#koala {
+  width: 100%;
+  height: 100%;
+  background-image: url('../../../assets/koala/koala-sprite.png');
+  background-repeat: no-repeat;
+  /* 精灵图整体缩放到「单帧宽 × 帧数」，再靠 background-position 切帧 */
+  background-size: var(--sheet-w) 100%;
+  background-position: 0 0;
+  transform-origin: 50% 92%;
+  /* 呼吸：静息时轻微起伏，让它看起来是活的而不是一张贴图 */
+  animation: breathe 3.6s ease-in-out infinite;
+  will-change: transform;
+  /* 落在桌面上要有一点点接地感，否则像贴纸浮在半空 */
+  filter: drop-shadow(0 6px 10px rgba(60, 55, 50, 0.28));
+}
+
+/* 敲击瞬间关掉呼吸，避免两个 transform 动画打架 */
+#koala.striking {
+  animation: none;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1, 1) translateY(0); }
+  50% { transform: scale(1.012, 0.988) translateY(1.5px); }
+}
+
+/* 敲中时的一下轻微下沉 + 回弹 */
+@keyframes impact {
+  0% { transform: scale(1, 1) translateY(0); }
+  30% { transform: scale(1.045, 0.955) translateY(4px); }
+  60% { transform: scale(0.985, 1.015) translateY(-1.5px); }
+  100% { transform: scale(1, 1) translateY(0); }
+}
+
+#koala.impact {
+  animation: impact 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 木鱼被敲中时从接触点扩散的一圈涟漪 */
+#ripple {
+  position: absolute;
+  left: 50%;
+  bottom: 22%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 162, 39, 0.55);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#ripple.go {
+  animation: ripple 520ms ease-out;
+}
+
+@keyframes ripple {
+  0% { transform: scale(0.4); opacity: 0.75; }
+  100% { transform: scale(7); opacity: 0; }
+}
+
+/* ── 奖励飘字 ─────────────────────────────── */
+#rewards {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.reward {
+  position: absolute;
+  left: 50%;
+  /* 起点在考拉头顶略上方。窗口 380 高、考拉 220 高贴底 18px，头顶约在 62% 处。 */
+  bottom: 63%;
+  white-space: nowrap;
+  font: 700 16px/1.2 -apple-system, 'PingFang SC', system-ui, sans-serif;
+  letter-spacing: 0.3px;
+  color: var(--c);
+  /* 描边让文字在任何桌面壁纸上都能读清 */
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9), 0 -1px 0 rgba(255, 255, 255, 0.9),
+    1px 0 0 rgba(255, 255, 255, 0.9), -1px 0 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(0, 0, 0, 0.18);
+  animation: float-up 1250ms cubic-bezier(0.16, 0.9, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 合并计数时数字跳一下。放在内层 span 上，避免和外层的飘升 transform 打架 */
+.reward .count {
+  display: inline-block;
+  transform-origin: 50% 60%;
+}
+
+.reward .count.bump {
+  animation: bump 260ms cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.45); }
+  100% { transform: scale(1); }
+}
+
+/* 弹出后持续上升。刻意不做「悬停」段：悬停会让 100ms 内连点的两条字停在同一高度重叠，
+   而持续上升能把时间差直接转成高度差。--y0 再按当前存活条数做初始错层，双保险。 */
+@keyframes float-up {
+  0% { transform: translate(calc(-50% + var(--dx)), calc(var(--y0) + 8px)) scale(0.6); opacity: 0; }
+  14% { transform: translate(calc(-50% + var(--dx)), calc(var(--y0) - 10px)) scale(1.14); opacity: 1; }
+  26% { transform: translate(calc(-50% + var(--dx)), calc(var(--y0) - 20px)) scale(1); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx) * 1.5), calc(var(--y0) - var(--lift))) scale(0.94); opacity: 0; }
+}

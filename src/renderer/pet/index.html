@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; media-src 'self' file:; style-src 'self' 'unsafe-inline'" />
+    <title>功德考拉</title>
+    <link rel="stylesheet" href="pet.css" />
+  </head>
+  <body>
+    <div id="anchor">
+      <div id="stage">
+        <div id="koala"></div>
+        <div id="ripple"></div>
+      </div>
+    </div>
+    <!-- 飘字层必须排在考拉之后：同为绝对定位时后者绘制在上层，
+         否则文字会被考拉不透明的身体挡住 -->
+    <div id="rewards" aria-hidden="true"></div>
+    <script type="module" src="pet.mjs"></script>
+  </body>
+</html>

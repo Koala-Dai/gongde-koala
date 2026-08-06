@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; style-src 'self' 'unsafe-inline'" />
+    <title>今日功德</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <div id="card">
+      <header>
+        <div class="title">
+          <h1>今日修行</h1>
+          <span id="date"></span>
+        </div>
+        <button id="close" title="关闭" aria-label="关闭">✕</button>
+      </header>
+
+      <!-- 敲击次数：面板的主数字，单独一块 -->
+      <section id="knocks">
+        <span class="num" id="knock-num">0</span>
+        <span class="unit">次</span>
+        <span class="cap">🪵 木鱼</span>
+      </section>
+
+      <!-- 六维收获 -->
+      <section id="dims"></section>
+
+      <!-- 近 7 天趋势 -->
+      <section id="trend">
+        <div class="trend-head">
+          <span>近 7 天</span>
+          <span id="trend-max"></span>
+        </div>
+        <div id="bars"></div>
+      </section>
+
+      <!-- 随机总结 -->
+      <section id="summary">
+        <p id="sum-main"></p>
+        <p id="sum-extra"></p>
+      </section>
+
+      <footer>
+        <span id="total"></span>
+        <span id="streak"></span>
+      </footer>
+    </div>
+    <script type="module" src="panel.mjs"></script>
+  </body>
+</html>

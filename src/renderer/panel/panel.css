@@ -1,0 +1,292 @@
+/* 今日功德面板：iOS 小组件风格的浮层卡片。
+   窗口本身透明，卡片自己画圆角和阴影——这样才能有真正的圆角而不是方角里画个圆。 */
+:root {
+  --paper: #fdfbf7;
+  --ink: #3d3833;
+  --ink-soft: #8a8178;
+  --line: rgba(61, 56, 51, 0.08);
+  --accent: #c9a227;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  font-family: -apple-system, 'PingFang SC', system-ui, sans-serif;
+  color: var(--ink);
+}
+
+#card {
+  position: absolute;
+  inset: 8px;
+  background: var(--paper);
+  border-radius: 18px;
+  border: 1px solid rgba(61, 56, 51, 0.06);
+  box-shadow:
+    0 1px 2px rgba(61, 56, 51, 0.06),
+    0 8px 24px rgba(61, 56, 51, 0.12),
+    0 18px 48px rgba(61, 56, 51, 0.08);
+  padding: 16px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  animation: pop 240ms cubic-bezier(0.2, 1.1, 0.35, 1);
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+#date {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+#close {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(61, 56, 51, 0.06);
+  color: var(--ink-soft);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+}
+
+#close:hover {
+  background: rgba(61, 56, 51, 0.12);
+  color: var(--ink);
+}
+
+/* ── 敲击次数 ─────────────────────────────── */
+#knocks {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(201, 162, 39, 0.1), rgba(201, 162, 39, 0.04));
+  border-radius: 13px;
+  margin-bottom: 12px;
+}
+
+#knocks .num {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+  /* 等宽数字：数字增长时不会左右跳动 */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+
+#knocks .unit {
+  font-size: 13px;
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+#knocks .cap {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-soft);
+  align-self: flex-end;
+}
+
+/* 数字变化时轻微跳一下，暗示「刚刚 +1」 */
+#knocks .num.tick {
+  animation: tick 300ms cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes tick {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.13); }
+  100% { transform: scale(1); }
+}
+
+/* ── 六维 ─────────────────────────────────── */
+#dims {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 10px;
+  margin-bottom: 13px;
+}
+
+.dim {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.dim .emoji {
+  font-size: 13px;
+  width: 16px;
+  text-align: center;
+}
+
+.dim .label {
+  color: var(--ink-soft);
+}
+
+.dim .val {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--d);
+}
+
+/* 当天为 0 的维度压暗，避免六个 +0 抢注意力 */
+.dim.zero .val,
+.dim.zero .label {
+  color: rgba(61, 56, 51, 0.28);
+}
+
+.dim.zero .emoji {
+  filter: grayscale(1);
+  opacity: 0.4;
+}
+
+/* 进度条：以当天最大值为满格，直观看出哪一维领先 */
+.dim .bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--d);
+  opacity: 0.22;
+  transform-origin: left;
+  transition: transform 320ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.dim {
+  position: relative;
+  padding-bottom: 4px;
+}
+
+/* ── 近 7 天趋势 ───────────────────────────── */
+#trend {
+  margin-bottom: 13px;
+}
+
+.trend-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  margin-bottom: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+#bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 62px;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.bar-col .fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, rgba(201, 162, 39, 0.75), rgba(201, 162, 39, 0.32));
+  transform-origin: bottom;
+  animation: grow 420ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+/* 今天高亮，和历史区分开 */
+.bar-col.today .fill {
+  background: linear-gradient(180deg, var(--accent), rgba(201, 162, 39, 0.5));
+}
+
+.bar-col.today .day {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 没敲的那天画一条虚底，避免看起来像数据缺失 */
+.bar-col.empty .fill {
+  background: rgba(61, 56, 51, 0.1);
+}
+
+.bar-col .day {
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+/* ── 总结 ─────────────────────────────────── */
+#summary {
+  margin-top: auto;
+  padding: 11px 13px;
+  background: rgba(61, 56, 51, 0.035);
+  border-radius: 12px;
+  border-left: 2.5px solid var(--accent);
+}
+
+#sum-main {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+#sum-extra {
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+#sum-extra:empty {
+  display: none;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}

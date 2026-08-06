@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'" />
+    <title>功德考拉·玄学小助手</title>
+    <link rel="stylesheet" href="chat.css" />
+  </head>
+  <body>
+    <div id="card">
+      <header>
+        <button id="back-btn" class="icon-btn" title="返回首页" style="display:none">‹</button>
+        <h1 id="title">🔮 玄学小助手</h1>
+        <div class="win-btns">
+          <button id="minimize" class="icon-btn win-btn" title="最小化">−</button>
+          <button id="maximize" class="icon-btn win-btn" title="最大化">□</button>
+          <button id="close" class="icon-btn win-btn" title="关闭">✕</button>
+        </div>
+      </header>
+
+      <!-- 首页 -->
+      <div id="home">
+        <div class="mode-cards">
+          <button class="mode-card" data-mode="bazi">
+            <span class="mc-icon">🔮</span>
+            <span class="mc-title">八字探索</span>
+            <span class="mc-desc">输入出生信息，生成专属分析</span>
+          </button>
+          <button class="mode-card" data-mode="zodiac">
+            <span class="mc-icon">⭐</span>
+            <span class="mc-title">星座运势</span>
+            <span class="mc-desc">快速查看今日状态</span>
+          </button>
+          <button class="mode-card" data-mode="oracle">
+            <span class="mc-icon">🃏</span>
+            <span class="mc-title">今日占卜</span>
+            <span class="mc-desc">随机获得今日提示</span>
+          </button>
+        </div>
+
+        <div class="quick-section">
+          <div class="qs-label">⚡ 快捷玩法</div>
+          <div class="quick-grid">
+            <button class="quick-btn" data-action="energy">✨ 能量签</button>
+            <button class="quick-btn" data-action="lot">🎋 抽签</button>
+            <button class="quick-btn" data-action="tarot">🃏 AI塔罗</button>
+            <button class="quick-btn" data-action="lucky">🎲 幸运数字</button>
+            <button class="quick-btn" data-action="mood">🧪 心情测试</button>
+            <button class="quick-btn" data-action="match">💑 星座配对</button>
+          </div>
+        </div>
+
+        <div class="privacy-note">
+          🔒 你的出生信息属于个人隐私，自愿填写即可。<br>
+          不强制真实信息，考拉不会保存敏感数据。
+        </div>
+      </div>
+
+      <!-- 聊天视图 -->
+      <div id="chat-view" style="display:none">
+        <div id="messages"></div>
+        <div id="chat-quick" class="quick-section chat-quick">
+          <div class="quick-grid">
+            <button class="quick-btn" data-action="energy">✨ 能量签</button>
+            <button class="quick-btn" data-action="lot">🎋 抽签</button>
+            <button class="quick-btn" data-action="tarot">🃏 AI塔罗</button>
+            <button class="quick-btn" data-action="lucky">🎲 幸运数字</button>
+            <button class="quick-btn" data-action="mood">🧪 心情测试</button>
+            <button class="quick-btn" data-action="match">💑 星座配对</button>
+          </div>
+        </div>
+        <div id="input-area">
+          <textarea id="input" rows="1" placeholder="跟考拉说点什么…"></textarea>
+          <button id="send" title="发送">➤</button>
+        </div>
+      </div>
+
+      <!-- 塔罗选牌浮层 -->
+      <div id="tarot-overlay" style="display:none">
+        <button class="overlay-close" data-overlay="tarot" title="返回">‹ 返回</button>
+        <div class="tarot-prompt">🃏 静心凝视，凭直觉选一张</div>
+        <div class="tarot-cards" id="tarot-cards"></div>
+      </div>
+
+      <!-- 星座配对浮层 -->
+      <div id="match-overlay" style="display:none">
+        <button class="overlay-close" data-overlay="match" title="返回">‹ 返回</button>
+        <div class="match-prompt">💑 选两个星座看看配对</div>
+        <div class="match-selects" id="match-selects"></div>
+        <button class="match-go" id="match-go">查看配对 →</button>
+      </div>
+    </div>
+    <script type="module" src="chat.mjs"></script>
+  </body>
+</html>

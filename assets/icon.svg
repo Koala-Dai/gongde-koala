@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fdf8ed"/>
+      <stop offset="100%" stop-color="#f0e6c8"/>
+    </linearGradient>
+    <radialGradient id="fur" cx="50%" cy="38%" r="68%">
+      <stop offset="0%" stop-color="#b3bbc2"/>
+      <stop offset="100%" stop-color="#9099a1"/>
+    </radialGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="20" flood-color="#3d3833" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <!-- 莲花座（佛系打坐） -->
+  <g>
+    <ellipse cx="512" cy="840" rx="236" ry="54" fill="#e9dcc0"/>
+    <ellipse cx="372" cy="820" rx="72" ry="42" fill="#f2e8d0" transform="rotate(-18 372 820)"/>
+    <ellipse cx="652" cy="820" rx="72" ry="42" fill="#f2e8d0" transform="rotate(18 652 820)"/>
+    <ellipse cx="512" cy="800" rx="84" ry="46" fill="#f7efdc"/>
+  </g>
+
+  <!-- 耳朵：大圆 + 内耳粉，向外张开 -->
+  <g transform="rotate(-20 296 318)">
+    <circle cx="296" cy="318" r="130" fill="url(#fur)" filter="url(#sh)"/>
+    <circle cx="296" cy="318" r="82" fill="#e8b8c8"/>
+  </g>
+  <g transform="rotate(20 728 318)">
+    <circle cx="728" cy="318" r="130" fill="url(#fur)" filter="url(#sh)"/>
+    <circle cx="728" cy="318" r="82" fill="#e8b8c8"/>
+  </g>
+
+  <!-- 脸 -->
+  <circle cx="512" cy="516" r="278" fill="url(#fur)" filter="url(#sh)"/>
+  <ellipse cx="512" cy="600" rx="160" ry="142" fill="#dfe5ea"/>
+
+  <!-- 闭眼（佛系冥想微笑眼） -->
+  <path d="M384 510 Q434 544 484 510" fill="none" stroke="#3d3833" stroke-width="16" stroke-linecap="round"/>
+  <path d="M540 510 Q590 544 640 510" fill="none" stroke="#3d3833" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- 大鼻子（考拉招牌） -->
+  <ellipse cx="512" cy="602" rx="74" ry="58" fill="#2b2b2b"/>
+  <ellipse cx="488" cy="582" rx="22" ry="14" fill="#5a5a5a" opacity="0.5"/>
+
+  <!-- 嘴 -->
+  <path d="M482 672 Q512 696 542 672" fill="none" stroke="#3d3833" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- 淡腮红 -->
+  <ellipse cx="356" cy="632" rx="42" ry="27" fill="#e8a5a5" opacity="0.25"/>
+  <ellipse cx="668" cy="632" rx="42" ry="27" fill="#e8a5a5" opacity="0.25"/>
+
+  <!-- 木鱼 + 功德+1 -->
+  <g transform="translate(724, 702)">
+    <circle r="80" fill="#c9a227" filter="url(#sh)"/>
+    <circle r="64" fill="#d8b53e"/>
+    <path d="M-34 2 Q0 -14 34 2" fill="none" stroke="#a8841c" stroke-width="8" stroke-linecap="round"/>
+    <text y="16" text-anchor="middle" font-family="PingFang SC, -apple-system, sans-serif" font-size="46" font-weight="800" fill="#fff">+1</text>
+  </g>
+</svg>

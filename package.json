@@ -1,0 +1,69 @@
+{
+  "name": "gongde-koala",
+  "version": "0.1.0",
+  "description": "功德考拉 —— 陪你上班的敲木鱼桌宠",
+  "private": true,
+  "type": "module",
+  "main": "src/main/index.mjs",
+  "author": "koaladai",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "assets": "node scripts/build-sprites.mjs",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win"
+  },
+  "keywords": [
+    "desktop-pet",
+    "electron",
+    "macos"
+  ],
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "ffmpeg-static": "^5.3.0",
+    "sharp": "^0.35.3"
+  },
+  "build": {
+    "appId": "com.gongde.koala",
+    "productName": "功德考拉",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/audio/**",
+      "assets/koala/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.lifestyle",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

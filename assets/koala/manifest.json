@@ -1,0 +1,63 @@
+{
+  "sprite": "koala-sprite.png",
+  "frameWidth": 370,
+  "frameHeight": 440,
+  "scale": 0.5,
+  "frames": [
+    {
+      "name": "idle",
+      "index": 0
+    },
+    {
+      "name": "raise1",
+      "index": 1
+    },
+    {
+      "name": "raise2",
+      "index": 2
+    },
+    {
+      "name": "down1",
+      "index": 3
+    },
+    {
+      "name": "down2",
+      "index": 4
+    },
+    {
+      "name": "hit",
+      "index": 5
+    },
+    {
+      "name": "settle1",
+      "index": 6
+    }
+  ],
+  "strike": [
+    [
+      "raise1",
+      45
+    ],
+    [
+      "raise2",
+      50
+    ],
+    [
+      "down1",
+      45
+    ],
+    [
+      "down2",
+      40
+    ],
+    [
+      "hit",
+      100
+    ],
+    [
+      "settle1",
+      120
+    ]
+  ],
+  "idle": "idle"
+}

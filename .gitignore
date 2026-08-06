@@ -1,0 +1,18 @@
+# ── 依赖 ──────────────────────────────────────
+node_modules/
+
+# ── 打包产物（由本地 build 或 CI 生成，体积大）──
+dist/
+out/
+
+# ── 系统 / 编辑器 ──────────────────────────────
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# ── 精灵图源帧（已生成的精灵图在 assets/koala，raw 仅用于重新生成）──
+assets/raw/
+
+# ── 本地运行时数据（用户数据在 ~/Library/Application Support）──
+*.local
