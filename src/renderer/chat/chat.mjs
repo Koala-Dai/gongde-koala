@@ -17,6 +17,9 @@ const el = {
   matchOverlay: document.getElementById('match-overlay'),
   matchSelects: document.getElementById('match-selects'),
   matchGo: document.getElementById('match-go'),
+  appVersion: document.getElementById('app-version'),
+  checkUpdate: document.getElementById('check-update'),
+  updateToast: document.getElementById('update-toast'),
 }
 
 let sending = false
@@ -439,3 +442,66 @@ window.koala.onChatFocus(() => {
   // 每次打开都回到首页
   showHome()
 })
+
+// ── 检测更新 ──────────────────────────────────────────
+function hideToast() { if (el.updateToast) el.updateToast.style.display = 'none' }
+function autoHideToast(ms) { setTimeout(hideToast, ms) }
+
+/** 主进程（手动或自动检查）拿到结果后，在这里弹提示条 */
+function showUpdateToast(info) {
+  const t = el.updateToast
+  if (!t) return
+  if (!info || info.error) {
+    t.className = 'update-toast info'
+    t.innerHTML = '🔍 检查更新失败，网络不给力，稍后再试～'
+    t.style.display = ''
+    autoHideToast(3500)
+    return
+  }
+  if (!info.updateAvailable) {
+    t.className = 'update-toast info'
+    t.innerHTML = `✅ 已是最新版 v${info.currentVersion}，不用更新～`
+    t.style.display = ''
+    autoHideToast(3500)
+    return
+  }
+  t.className = 'update-toast avail'
+  t.innerHTML = `
+    <div class="ut-title">🎉 发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}）</div>
+    <div class="ut-actions">
+      <button class="ut-download">⬇️ 下载新版本</button>
+      <button class="ut-detail">更新说明</button>
+      <button class="ut-later">稍后</button>
+    </div>`
+  t.style.display = ''
+  t.querySelector('.ut-download').addEventListener('click', () => {
+    window.koala.openExternal(info.downloadUrl)
+    hideToast()
+  })
+  t.querySelector('.ut-detail').addEventListener('click', () => {
+    window.koala.openExternal(info.releaseUrl)
+  })
+  t.querySelector('.ut-later').addEventListener('click', () => {
+    window.koala.dismissUpdate(info.latestVersion)
+    hideToast()
+  })
+}
+
+// 主进程自动检查 / 菜单「检查更新」都会推到这里
+window.koala.onUpdateAvailable?.((info) => showUpdateToast(info))
+
+// 首页「检查更新」按钮
+el.checkUpdate?.addEventListener('click', async () => {
+  el.checkUpdate.disabled = true
+  el.checkUpdate.textContent = '检查中…'
+  try {
+    const info = await window.koala.checkUpdate()
+    showUpdateToast(info)
+  } finally {
+    el.checkUpdate.disabled = false
+    el.checkUpdate.textContent = '🔄 检查更新'
+  }
+})
+
+// 显示当前版本号
+window.koala.getVersion?.().then((v) => { if (v) el.appVersion.textContent = 'v' + v }).catch(() => {})

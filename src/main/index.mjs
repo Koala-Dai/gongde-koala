@@ -552,10 +552,120 @@ ipcMain.on('chat:maximize', () => {
 })
 ipcMain.handle('chat:is-maximized', () => chatWin?.isMaximized() ?? false)
 ipcMain.handle('settings:get', () => getSettings())
+ipcMain.handle('app:version', () => app.getVersion())
 ipcMain.handle('settings:set', (_e, patch) => {
   const s = setSettings(patch)
   if ('launchAtLogin' in patch) app.setLoginItemSettings({ openAtLogin: !!patch.launchAtLogin })
   return s
+})
+
+// ── 检测更新 ──────────────────────────────────────────
+// 仓库固定为 Koala-Dai/gongde-koala；用 GitHub Releases API 取 latest，
+// 比对 app 版本，按平台/架构挑出对应安装包。不依赖证书/自动安装——
+// 当前安装包未签名、Windows 为便携版，故做成「检测 + 一键下载」而非静默自动升级。
+const REPO = 'Koala-Dai/gongde-koala'
+
+/** GitHub Releases API 要求带 User-Agent，否则 403 */
+async function fetchLatestRelease() {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    headers: { 'User-Agent': 'gongde-koala', Accept: 'application/vnd.github+json' },
+  })
+  if (!res.ok) return null
+  return res.json()
+}
+
+function parseVersion(tag) {
+  return String(tag).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+}
+
+/** a 是否比 b 新（语义化版本逐段比较） */
+function isNewer(a, b) {
+  const av = parseVersion(a)
+  const bv = parseVersion(b)
+  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+    const x = av[i] ?? 0
+    const y = bv[i] ?? 0
+    if (x > y) return true
+    if (x < y) return false
+  }
+  return false
+}
+
+/** 按当前平台/架构从 release 资源里挑出该下载的那个 */
+function pickAsset(assets, platform, arch) {
+  if (!Array.isArray(assets)) return null
+  if (platform === 'darwin') {
+    const arm = assets.find((a) => /arm64/i.test(a.name) && /\.dmg$/i.test(a.name))
+    const intel = assets.find((a) => !/arm64/i.test(a.name) && /\.dmg$/i.test(a.name))
+    if (arch === 'arm64' && arm) return arm
+    if (intel) return intel
+    return arm || intel || null
+  }
+  if (platform === 'win32') {
+    return assets.find((a) => /\.exe$/i.test(a.name)) || null
+  }
+  return null
+}
+
+/**
+ * 检测更新。返回：
+ * { updateAvailable, currentVersion, latestVersion, downloadUrl, releaseUrl, releaseNotes, error? }
+ */
+async function checkForUpdate() {
+  try {
+    const release = await fetchLatestRelease()
+    if (!release || !release.tag_name) return { updateAvailable: false }
+    const current = app.getVersion()
+    const latest = release.tag_name
+    const updateAvailable = isNewer(latest, current)
+    let downloadUrl = release.html_url
+    if (updateAvailable) {
+      const asset = pickAsset(release.assets, process.platform, process.arch)
+      if (asset) downloadUrl = asset.browser_download_url
+    }
+    return {
+      updateAvailable,
+      currentVersion: current,
+      latestVersion: latest.replace(/^v/i, ''),
+      downloadUrl,
+      releaseUrl: release.html_url,
+      releaseNotes: release.body || '',
+    }
+  } catch (err) {
+    return { updateAvailable: false, error: err.message }
+  }
+}
+
+/** 把更新提示弹到聊天窗口（确保窗口已创建并可见） */
+function showUpdateToast(info) {
+  const win = createChatWindow()
+  positionChatNearPet()
+  win.webContents.send('chat:focus')
+  win.show()
+  win.focus()
+  app.dock?.show()
+  win.webContents.send('app:update-available', info)
+}
+
+/** 启动后延迟自动检查；用户已忽略的版本不再打扰 */
+function autoCheckUpdate() {
+  checkForUpdate()
+    .then((info) => {
+      if (!info.updateAvailable) return
+      const dismissed = getSettings().dismissedUpdate
+      if (dismissed && dismissed === info.latestVersion) return
+      showUpdateToast(info)
+    })
+    .catch(() => {})
+}
+
+// 手动/自动检查都走这里
+ipcMain.handle('app:check-update', () => checkForUpdate())
+ipcMain.on('app:open-external', (_e, url) => {
+  if (typeof url === 'string') shell.openExternal(url)
+})
+ipcMain.on('app:dismiss-update', (_e, version) => {
+  if (typeof version === 'string') setSettings({ dismissedUpdate: version })
 })
 
 /** 托盘和右键考拉共用同一份菜单，避免两处维护 */
@@ -589,6 +699,7 @@ function buildMenu() {
     { label: '🐨 中考拉（默认）', click: () => changeScale(1.0) },
     { label: '🐨 大考拉', click: () => changeScale(1.4) },
     { type: 'separator' },
+    { label: '🔄 检查更新', click: async () => { const info = await checkForUpdate(); showUpdateToast(info) } },
     { label: '打开数据文件夹', click: () => shell.openPath(app.getPath('userData')) },
     { label: '退出功德考拉', role: 'quit' },
   ])
@@ -624,6 +735,8 @@ app.whenReady().then(() => {
   app.dock?.setIcon?.(join(ROOT, 'build', 'icon.png'))
   createPetWindow()
   buildTray()
+  // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）
+  setTimeout(autoCheckUpdate, 5000)
   // if (process.env.KOALA_SHOT) devCapture()  // 开发期自检，正常启动不执行
 })
 

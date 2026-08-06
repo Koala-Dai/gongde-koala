@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('koala', {
   recent: (n) => ipcRenderer.invoke('stats:recent', n),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  getVersion: () => ipcRenderer.invoke('app:version'),
 
   /** 今日功德面板 */
   togglePanel: () => ipcRenderer.send('panel:toggle'),
@@ -48,4 +49,13 @@ contextBridge.exposeInMainWorld('koala', {
   zodiacMatch: (sign1, sign2) => ipcRenderer.invoke('chat:zodiac-match', sign1, sign2),
   /** 心情测试题 */
   moodQuiz: () => ipcRenderer.invoke('chat:mood-quiz'),
+
+  /** 检测更新：返回 { updateAvailable, currentVersion, latestVersion, downloadUrl, releaseUrl, releaseNotes } */
+  checkUpdate: () => ipcRenderer.invoke('app:check-update'),
+  /** 主进程检测到更新时主动推送（含自动检查） */
+  onUpdateAvailable: (fn) => ipcRenderer.on('app:update-available', (_e, info) => fn(info)),
+  /** 用浏览器打开外部链接（下载安装包 / 更新说明） */
+  openExternal: (url) => ipcRenderer.send('app:open-external', url),
+  /** 用户点了「稍后」：记住该版本，自动检查不再打扰 */
+  dismissUpdate: (version) => ipcRenderer.send('app:dismiss-update', version),
 })

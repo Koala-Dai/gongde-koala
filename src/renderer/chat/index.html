@@ -54,6 +54,11 @@
           🔒 你的出生信息属于个人隐私，自愿填写即可。<br>
           不强制真实信息，考拉不会保存敏感数据。
         </div>
+
+        <div class="footer-row">
+          <span id="app-version">v…</span>
+          <button id="check-update" class="link-btn" title="检查是否有新版本">🔄 检查更新</button>
+        </div>
       </div>
 
       <!-- 聊天视图 -->
@@ -90,6 +95,10 @@
         <button class="match-go" id="match-go">查看配对 →</button>
       </div>
     </div>
+
+    <!-- 更新提示条 -->
+    <div id="update-toast" class="update-toast" style="display:none"></div>
+
     <script type="module" src="chat.mjs"></script>
   </body>
 </html>
