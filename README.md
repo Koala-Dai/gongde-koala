@@ -3,10 +3,6 @@
 > 陪你上班的「敲木鱼」桌面宠物。一只会陪你聊天、看八字、查星座、抽签占卜的治愈系考拉。
 
 <p align="center">
-  <img src="assets/README-banner.svg" alt="功德考拉界面示意" width="760"/>
-</p>
-
-<p align="center">
   <a href="https://github.com/Koala-Dai/gongde-koala/releases/latest"><img src="https://img.shields.io/badge/立即下载%20(latest)-success?style=for-the-badge" alt="下载"/></a>
   <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Windows-blue?style=for-the-badge" alt="平台"/>
   <img src="https://img.shields.io/badge/许可证-ISC-blue?style=for-the-badge" alt="许可证"/>
