@@ -200,9 +200,11 @@ let interactive = false
 
 window.addEventListener('mousemove', (e) => {
   const hit = hitTest(e.clientX, e.clientY)
+  // 窗口保持鼠标穿透，只靠 forward:true 把事件转发进来；
+  // 不再通过 setInteractive(true) 把窗口变成真实点击目标，避免 app 被激活。
+  // 鼠标指针仍随考拉轮廓变化，保留视觉反馈。
   if (hit !== interactive) {
     interactive = hit
-    window.koala.setInteractive(hit)
     document.body.style.cursor = hit ? 'pointer' : 'default'
   }
 })

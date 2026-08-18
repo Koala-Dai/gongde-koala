@@ -500,11 +500,17 @@ ipcMain.on('pet:pointerdown', () => {
     startY: cursor.y,
     moved: 0,
     held: false, // 长按已触发开面板时置真，松手不再当敲击
+    captured: false, // 是否已切换成鼠标捕获模式（拖拽用）
     timer: setInterval(() => {
       if (!petWin || !drag) return
       const c = screen.getCursorScreenPoint()
       drag.moved = Math.max(drag.moved, Math.hypot(c.x - drag.startX, c.y - drag.startY))
       petWin.setPosition(c.x - drag.dx, c.y - drag.dy, false)
+      // 拖拽超过阈值后再临时接管鼠标，避免连敲时让窗口变成可交互目标、导致 app 被激活。
+      if (!drag.captured && drag.moved > 10) {
+        drag.captured = true
+        petWin.setIgnoreMouseEvents(false, { forward: true })
+      }
     }, 16),
   }
   // 长按（按住约 450ms 且几乎没拖动）才打开「今日功德」面板。
@@ -526,7 +532,12 @@ ipcMain.on('pet:pointerup', () => {
   const wasClick = drag.moved < 5 // 手抖几个像素仍算点击
   const [x, y] = petWin.getPosition()
   const held = drag.held // 长按已开面板，松手时不要再敲一下
+  const captured = drag.captured
   drag = null
+  // 拖动时临时接管了鼠标，松开立刻恢复为穿透模式，避免 app 被后续点击激活。
+  if (captured) {
+    petWin.setIgnoreMouseEvents(true, { forward: true })
+  }
   if (!wasClick) {
     setPetPos(x, y)
     return
