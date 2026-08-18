@@ -25,19 +25,9 @@ echo "using python: ${PYTHON:-python3}"
 
 OUT=src/native/mouse_listener.node
 
-# 备份应用图标，避免被 rm -rf build 误删
-ICON_BAK=$(mktemp -d)
-for f in build/icon.icns build/icon.png; do
-  [ -f "$f" ] && cp "$f" "$ICON_BAK/" || true
-done
-
-restore_icons() {
-  for f in icon.icns icon.png; do
-    [ -f "$ICON_BAK/$f" ] && cp "$ICON_BAK/$f" "build/$f" || true
-  done
-}
-trap restore_icons EXIT
-
+# node-gyp 产物全在 build/，但 build/ 里还有被 git 跟踪的应用图标。
+# 备份目录方案不可靠（mktemp/沙箱环境差异），改用 git 直接恢复——最稳。
+rm -rf build
 BUILD_ONE() {
   local arch="$1"
   echo "==> configure + build ($arch)"
@@ -45,14 +35,19 @@ BUILD_ONE() {
   "$NODE_GYP" build --arch="$arch" >/dev/null
   cp build/Release/mouse_listener.node "/tmp/ml-$arch.node"
 }
+restore_icons() {
+  # 图标由 git 跟踪，无论中间过程如何，最后从 git 恢复
+  git checkout -- build/ 2>/dev/null || true
+}
+trap restore_icons EXIT
 
-rm -rf build
 BUILD_ONE arm64
 BUILD_ONE x64
-restore_icons
-trap - EXIT
 
 echo "==> lipo 合成通用二进制"
 lipo -create /tmp/ml-arm64.node /tmp/ml-x64.node -output "$OUT"
+restore_icons
+trap - EXIT
 echo "built: $OUT"
 file "$OUT"
+ls -la build/icon.* 2>/dev/null || echo "!! 警告：图标未恢复"
