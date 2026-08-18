@@ -514,9 +514,26 @@ function hitKoalaAt(sx, sy) {
   return petMask.data[my * petMask.w + mx] === 1
 }
 
+/** 把考拉命中区域（屏幕坐标）推给原生模块，让它能拦截落在考拉身上的点击。
+ *  full=false 时只同步原点（拖动窗口时的廉价更新）。 */
+function pushNativeRegion(full = true) {
+  if (!nativeMouseOK || !mouseListener || !petWin || !petMask) return
+  const [wx, wy] = petWin.getPosition()
+  const x = wx + petMask.left
+  const y = wy + petMask.top
+  if (full) {
+    // IPC 过来的 data 可能不是 Uint8Array（取决于序列化路径），统一转成原生模块认的 TypedArray
+    const data = petMask.data instanceof Uint8Array ? petMask.data : Uint8Array.from(petMask.data)
+    mouseListener.setRegion(x, y, petMask.w, petMask.h, data)
+  } else {
+    mouseListener.setOrigin(x, y)
+  }
+}
+
 /** 渲染进程算好命中掩膜后传过来（窗口内坐标 + alpha 数据） */
 ipcMain.on('pet:set-mask', (_e, mask) => {
   petMask = { left: mask.left, top: mask.top, w: mask.w, h: mask.h, data: mask.data }
+  pushNativeRegion(true)
 })
 
 /** 开始一次按下：记录偏移，开定时器跟踪位移，长按则开面板 */
@@ -535,7 +552,13 @@ function beginDrag(sx, sy) {
       const c = screen.getCursorScreenPoint()
       drag.moved = Math.max(drag.moved, Math.hypot(c.x - drag.startX, c.y - drag.startY))
       // 拖拽超过阈值才真的移动窗口，连敲（几乎不动）不会误移动
-      if (drag.moved > 10) petWin.setPosition(c.x - drag.dx, c.y - drag.dy, false)
+      if (drag.moved > 10) {
+        const nx = c.x - drag.dx
+        const ny = c.y - drag.dy
+        petWin.setPosition(nx, ny, false)
+        // 窗口在动，原生拦截区域的屏幕原点也要跟着动
+        if (nativeMouseOK && mouseListener && petMask) mouseListener.setOrigin(nx + petMask.left, ny + petMask.top)
+      }
     }, 16),
   }
   // 长按（按住约 450ms 且几乎没拖动）才打开「今日功德」面板。
@@ -560,6 +583,7 @@ function endDrag() {
   drag = null
   if (!wasClick) {
     setPetPos(x, y)
+    pushNativeRegion(false) // 拖完落位，最终同步一次原点
     return
   }
   if (held) return
