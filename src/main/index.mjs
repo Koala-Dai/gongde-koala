@@ -1,5 +1,5 @@
 // 桌宠主进程：透明置顶窗口 + 形状级鼠标穿透 + 拖拽 + 托盘。
-import { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
@@ -20,6 +20,18 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
+
+// ── 全局鼠标监听（原生模块）─────────────────────────
+// 用 CGEventTap 监听全局鼠标，让 pet 窗口永远保持纯穿透、绝不激活 app。
+// 未授权「输入监控」或该模块缺失时，nativeMouseOK 为 false，退回旧 forward 方案。
+let nativeMouseOK = false
+let petMask = null // { left, top, w, h, data: Uint8Array } 窗口内坐标下的考拉实体 alpha 掩膜
+let mouseListener = null
+try {
+  mouseListener = require(join(ROOT, 'src', 'native', 'mouse_listener.node'))
+} catch (e) {
+  console.warn('[native mouse] 加载失败，退回 forward 模式:', e.message)
+}
 
 // 必须在 app.whenReady 之前设置：userData 路径由它决定。
 // 不设的话所有开发中的 Electron 应用会共用 ~/Library/Application Support/Electron，
@@ -474,48 +486,60 @@ function createPetWindow() {
   petWin.setAlwaysOnTop(true, 'screen-saver')
   petWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
-  // 默认穿透：窗口是矩形，但考拉不是。forward:true 让渲染进程仍能收到 mousemove，
-  // 由它做 alpha 命中测试后再告诉主进程要不要接管鼠标。
-  petWin.setIgnoreMouseEvents(true, { forward: true })
+  // 默认穿透。原生监听可用时窗口纯穿透（不接收事件、绝不激活 app）；
+  // 不可用时退回 forward，由渲染进程接管点击（旧方案，快敲仍可能抢焦点）。
+  applyPetMouseMode()
 
   petWin.loadFile(join(ROOT, 'src', 'renderer', 'pet', 'index.html'))
   petWin.on('closed', () => { petWin = null })
   return petWin
 }
 
-/** 命中考拉实体像素时接管鼠标，否则放行给下层窗口 */
-ipcMain.on('pet:set-interactive', (_e, interactive) => {
-  if (!petWin || drag) return
-  petWin.setIgnoreMouseEvents(!interactive, { forward: true })
+/** 根据原生监听是否可用，切换 pet 窗口的鼠标穿透模式 */
+function applyPetMouseMode() {
+  if (!petWin) return
+  petWin.setIgnoreMouseEvents(true, { forward: !nativeMouseOK })
+}
+
+/** 屏幕坐标是否落在考拉实体像素上（用渲染进程传来的 alpha 掩膜做精确判定） */
+function hitKoalaAt(sx, sy) {
+  if (!petWin || !petMask) return false
+  const b = petWin.getBounds()
+  const lx = sx - b.x
+  const ly = sy - b.y
+  if (lx < petMask.left || ly < petMask.top) return false
+  const mx = Math.round(lx - petMask.left)
+  const my = Math.round(ly - petMask.top)
+  if (mx < 0 || my < 0 || mx >= petMask.w || my >= petMask.h) return false
+  return petMask.data[my * petMask.w + mx] === 1
+}
+
+/** 渲染进程算好命中掩膜后传过来（窗口内坐标 + alpha 数据） */
+ipcMain.on('pet:set-mask', (_e, mask) => {
+  petMask = { left: mask.left, top: mask.top, w: mask.w, h: mask.h, data: mask.data }
 })
 
-ipcMain.on('pet:pointerdown', () => {
+/** 开始一次按下：记录偏移，开定时器跟踪位移，长按则开面板 */
+function beginDrag(sx, sy) {
   if (!petWin) return
-  const cursor = screen.getCursorScreenPoint()
   const [wx, wy] = petWin.getPosition()
   drag = {
-    dx: cursor.x - wx,
-    dy: cursor.y - wy,
-    startX: cursor.x,
-    startY: cursor.y,
+    dx: sx - wx,
+    dy: sy - wy,
+    startX: sx,
+    startY: sy,
     moved: 0,
-    held: false, // 长按已触发开面板时置真，松手不再当敲击
-    captured: false, // 是否已切换成鼠标捕获模式（拖拽用）
+    held: false,
     timer: setInterval(() => {
       if (!petWin || !drag) return
       const c = screen.getCursorScreenPoint()
       drag.moved = Math.max(drag.moved, Math.hypot(c.x - drag.startX, c.y - drag.startY))
-      petWin.setPosition(c.x - drag.dx, c.y - drag.dy, false)
-      // 拖拽超过阈值后再临时接管鼠标，避免连敲时让窗口变成可交互目标、导致 app 被激活。
-      if (!drag.captured && drag.moved > 10) {
-        drag.captured = true
-        petWin.setIgnoreMouseEvents(false, { forward: true })
-      }
+      // 拖拽超过阈值才真的移动窗口，连敲（几乎不动）不会误移动
+      if (drag.moved > 10) petWin.setPosition(c.x - drag.dx, c.y - drag.dy, false)
     }, 16),
   }
   // 长按（按住约 450ms 且几乎没拖动）才打开「今日功德」面板。
-  // 木鱼本来就是用来连敲的，双击和连敲无法区分，所以用长按替代双击，
-  // 这样连敲时不会再误弹出面板。
+  // 木鱼本来就是用来连敲的，双击和连敲无法区分，所以用长按替代双击。
   drag.holdTimer = setTimeout(() => {
     if (!petWin || !drag || drag.held) return
     if (drag.moved < 8) {
@@ -523,27 +547,50 @@ ipcMain.on('pet:pointerdown', () => {
       togglePanel()
     }
   }, 450)
-})
+}
 
-ipcMain.on('pet:pointerup', () => {
+/** 松开：位移小算点击（敲木鱼），否则算拖动结束 */
+function endDrag() {
   if (!petWin || !drag) return
   clearInterval(drag.timer)
   clearTimeout(drag.holdTimer)
-  const wasClick = drag.moved < 5 // 手抖几个像素仍算点击
+  const wasClick = drag.moved < 5
   const [x, y] = petWin.getPosition()
-  const held = drag.held // 长按已开面板，松手时不要再敲一下
-  const captured = drag.captured
+  const held = drag.held
   drag = null
-  // 拖动时临时接管了鼠标，松开立刻恢复为穿透模式，避免 app 被后续点击激活。
-  if (captured) {
-    petWin.setIgnoreMouseEvents(true, { forward: true })
-  }
   if (!wasClick) {
     setPetPos(x, y)
     return
   }
   if (held) return
   petWin.webContents.send('pet:click')
+}
+
+/** 原生全局监听回调：code 见 mouse_listener.cc（1=左键下 2=左键上 4=右键下） */
+function handleGlobalMouse(code, x, y) {
+  if (!petWin) return
+  if (code === 1) {
+    if (hitKoalaAt(x, y)) beginDrag(x, y)
+  } else if (code === 2) {
+    endDrag()
+  } else if (code === 4) {
+    if (hitKoalaAt(x, y)) buildMenu().popup({ window: petWin })
+  }
+}
+
+/** 旧 forward 方案的桥接：原生不可用时由渲染进程转发点击 */
+ipcMain.on('pet:pointerdown', () => {
+  if (nativeMouseOK) return
+  const c = screen.getCursorScreenPoint()
+  beginDrag(c.x, c.y)
+})
+ipcMain.on('pet:pointerup', () => {
+  if (nativeMouseOK) return
+  endDrag()
+})
+ipcMain.on('pet:contextmenu', () => {
+  if (nativeMouseOK) return
+  buildMenu().popup({ window: petWin })
 })
 
 ipcMain.handle('stats:knock', (_e, rewardKey) => {
@@ -725,8 +772,41 @@ function buildMenu() {
 // 右键考拉弹出菜单。这是托盘之外的第二个入口——菜单栏拥挤时 macOS 会静默丢弃托盘图标，
 // 只靠托盘会导致用户完全找不到设置和退出。
 ipcMain.on('pet:contextmenu', () => {
+  if (nativeMouseOK) return
   buildMenu().popup({ window: petWin })
 })
+
+/** 启动全局鼠标监听（原生模块）。失败（缺模块 / 未授权「输入监控」）则退回 forward 模式。 */
+async function startNativeMouse() {
+  if (process.platform !== 'darwin' || !mouseListener) return
+  try {
+    mouseListener.start((code, x, y) => handleGlobalMouse(code, x, y))
+    nativeMouseOK = true
+    console.log('[native mouse] 全局鼠标监听已启用（窗口将永远纯穿透，快敲也不会抢焦点）')
+  } catch (e) {
+    nativeMouseOK = false
+    console.warn('[native mouse] 启动失败，退回 forward 模式:', e.message)
+    setTimeout(async () => {
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        title: '需要「输入监控」权限',
+        message:
+          '功德考拉想在不抢走浏览器焦点的情况下响应你的敲击。\n' +
+          '请在「系统设置 → 隐私与安全性 → 输入监控」中，为「功德考拉」开启权限，然后重启应用。\n' +
+          '（未授权时也能用，只是快速连敲时偶尔会把窗口顶到前面。）',
+        buttons: ['稍后', '去系统设置授权'],
+        defaultId: 1,
+        cancelId: 0,
+      })
+      if (response === 1) {
+        // 直达「输入监控」设置面板
+        shell.openExternal(
+          'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent'
+        )
+      }
+    }, 1500)
+  }
+}
 
 function buildTray() {
   const iconPath = join(ROOT, 'assets', 'koala', 'trayTemplate.png')
@@ -742,7 +822,7 @@ function buildTray() {
   console.log('[tray] bounds =', JSON.stringify(b), ok ? '← 正常' : '← 图标未进入菜单栏（空间不足），请用右键考拉打开菜单')
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   initStore()
   // 首次启动不内置任何 Key：让用户在本机「设置」里填入自己的 DeepSeek Key。
   // 不要把密钥写进源码——会随仓库 / 分享包一起泄露。
@@ -750,6 +830,7 @@ app.whenReady().then(() => {
   app.dock?.hide()
   // 设置 Dock 图标：聊天窗口打开时显示自定义考拉图标，而不是默认 Electron 图标
   app.dock?.setIcon?.(join(ROOT, 'build', 'icon.png'))
+  await startNativeMouse()
   createPetWindow()
   buildTray()
   // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）

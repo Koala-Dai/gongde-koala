@@ -5,6 +5,12 @@ node_modules/
 dist/
 out/
 
+# ── 原生模块编译中间产物（node-gyp 生成；通用 .node 已提交进 src/native 供 CI/Windows 使用）──
+# 注意：build/ 下有应用图标 icon.icns / icon.png 必须跟踪，只能忽略其余编译产物
+build/*
+!build/icon.icns
+!build/icon.png
+
 # ── 系统 / 编辑器 ──────────────────────────────
 .DS_Store
 *.log

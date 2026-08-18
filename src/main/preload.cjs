@@ -2,8 +2,10 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('koala', {
-  /** 鼠标是否落在考拉实体像素上——决定窗口接管还是穿透 */
+  /** 鼠标是否落在考拉实体像素上——决定窗口接管还是穿透（旧 forward 方案用） */
   setInteractive: (v) => ipcRenderer.send('pet:set-interactive', v),
+  /** 渲染进程算好的命中掩膜：原生全局监听用它在屏幕坐标上判断点的是不是考拉 */
+  setMask: (mask) => ipcRenderer.send('pet:set-mask', mask),
   pointerDown: () => ipcRenderer.send('pet:pointerdown'),
   pointerUp: () => ipcRenderer.send('pet:pointerup'),
   /** 右键考拉弹出菜单（托盘之外的备用入口） */

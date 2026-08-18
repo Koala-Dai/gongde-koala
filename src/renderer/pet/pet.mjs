@@ -61,6 +61,15 @@ async function loadSprite() {
   await buildHitMask(w * s, h * s)
   stageRect = stageEl.getBoundingClientRect()
   document.documentElement.style.setProperty('--koala-scale', s)
+  // 把命中掩膜交给主进程，供原生全局监听在屏幕坐标上精确判断「点的是不是考拉」。
+  // 窗口内坐标：掩膜原点 = stage 在窗口内的左上角；尺寸 = 掩膜宽高；data = 0/1 alpha 掩膜。
+  window.koala.setMask({
+    left: stageRect.left,
+    top: stageRect.top,
+    w: maskW,
+    h: maskH,
+    data: hitMask,
+  })
 }
 
 function setFrame(name) {
