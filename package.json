@@ -34,6 +34,7 @@
     "directories": {
       "output": "dist"
     },
+    "npmRebuild": false,
     "files": [
       "src/**/*",
       "assets/audio/**",
