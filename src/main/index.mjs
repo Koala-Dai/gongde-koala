@@ -447,6 +447,10 @@ function createPetWindow() {
     ...pos,
     width: PET.width,
     height: PET.height,
+    // type:panel 让窗口成为 NSPanel；再配合 focusable:false 加上
+    // NSNonactivatingPanelMask，点击考拉就不会激活 app、不会抢走浏览器焦点。
+    // 这是 macOS 桌宠「可点击但不抢焦点」的标准做法。
+    type: 'panel',
     transparent: true,
     frame: false,
     resizable: false,
