@@ -454,9 +454,11 @@ function createPetWindow() {
     hasShadow: false,
     skipTaskbar: true,
     fullscreenable: false,
-    // 关键：桌宠不该抢焦点。用户在写代码时点一下考拉，编辑器不应该失焦。
+    // 关键：桌宠不该抢焦点。用户在浏览器/编辑器里时，点一下考拉（敲木鱼）不应该
+    // 把当前 app 顶到前台、让浏览器失焦。focusable:false 把窗口变成「非激活面板」，
+    // 点击只把事件交给考拉、不会激活 app。不要加 acceptFirstMouse:true——那在 macOS 上
+    // 反而会让点击重新激活 app，导致一边敲一边看不了浏览器。
     focusable: false,
-    acceptFirstMouse: true,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
