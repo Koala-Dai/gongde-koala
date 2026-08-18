@@ -493,6 +493,7 @@ ipcMain.on('pet:pointerdown', () => {
     startX: cursor.x,
     startY: cursor.y,
     moved: 0,
+    held: false, // 长按已触发开面板时置真，松手不再当敲击
     timer: setInterval(() => {
       if (!petWin || !drag) return
       const c = screen.getCursorScreenPoint()
@@ -500,32 +501,31 @@ ipcMain.on('pet:pointerdown', () => {
       petWin.setPosition(c.x - drag.dx, c.y - drag.dy, false)
     }, 16),
   }
+  // 长按（按住约 450ms 且几乎没拖动）才打开「今日功德」面板。
+  // 木鱼本来就是用来连敲的，双击和连敲无法区分，所以用长按替代双击，
+  // 这样连敲时不会再误弹出面板。
+  drag.holdTimer = setTimeout(() => {
+    if (!petWin || !drag || drag.held) return
+    if (drag.moved < 8) {
+      drag.held = true
+      togglePanel()
+    }
+  }, 450)
 })
-
-/** 上一次点击的时间戳，用于识别双击 */
-let lastClickAt = 0
 
 ipcMain.on('pet:pointerup', () => {
   if (!petWin || !drag) return
   clearInterval(drag.timer)
+  clearTimeout(drag.holdTimer)
   const wasClick = drag.moved < 5 // 手抖几个像素仍算点击
   const [x, y] = petWin.getPosition()
+  const held = drag.held // 长按已开面板，松手时不要再敲一下
   drag = null
   if (!wasClick) {
     setPetPos(x, y)
     return
   }
-
-  // 双击开面板。刻意不做「等 300ms 看有没有第二下」的延迟判定——
-  // 那会让每一次敲木鱼都发黏。这里让第一下正常敲，第二下追加开面板，
-  // 代价只是双击时多敲一次（而用户本来就是在敲木鱼，不算副作用）。
-  const now = Date.now()
-  if (now - lastClickAt < 320) {
-    lastClickAt = 0
-    togglePanel()
-    return
-  }
-  lastClickAt = now
+  if (held) return
   petWin.webContents.send('pet:click')
 })
 
