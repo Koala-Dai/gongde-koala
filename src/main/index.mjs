@@ -2,6 +2,7 @@
 import { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { existsSync } from 'node:fs'
 import {
   initStore, flushNow, recordKnock, getDay, getTotal,
   getPetPos, setPetPos, getSettings, setSettings, recentDays,
@@ -21,16 +22,24 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
 
-// ── 全局鼠标监听（原生模块）─────────────────────────
-// 用 CGEventTap 监听全局鼠标，让 pet 窗口永远保持纯穿透、绝不激活 app。
-// 未授权「输入监控」或该模块缺失时，nativeMouseOK 为 false，退回旧 forward 方案。
-let nativeMouseOK = false
+// ── 形状级鼠标穿透（原生模块）─────────────────────────
+// 用原生模块重写 pet 窗口内容视图的 hitTest:，仅考拉实体像素接收点击，
+// 透明区域直接穿透到下层（浏览器/桌面）。不需要任何系统权限（无需「输入监控」），
+// 比 CGEventTap 拦截稳得多。模块缺失/安装失败时退回旧 forward 方案。
+let hitOK = false
 let petMask = null // { left, top, w, h, data: Uint8Array } 窗口内坐标下的考拉实体 alpha 掩膜
-let mouseListener = null
+let hitModule = null
 try {
-  mouseListener = require(join(ROOT, 'src', 'native', 'mouse_listener.node'))
+  // 开发期：.node 在 src/native/ 下，ROOT 即项目根。
+  // 打包后：asarUnpack 把 .node 解到 app.asar.unpacked 同级目录（asar 内只留引用），
+  // 所以要先试 asar 内路径，失败再试 unpacked 路径，否则会 require 失败、回退到 forward 模式。
+  let hitPath = join(ROOT, 'src', 'native', 'koala_hit.node')
+  if (!existsSync(hitPath)) {
+    hitPath = join(ROOT, '..', 'app.asar.unpacked', 'src', 'native', 'koala_hit.node')
+  }
+  hitModule = require(hitPath)
 } catch (e) {
-  console.warn('[native mouse] 加载失败，退回 forward 模式:', e.message)
+  console.warn('[hit] 原生模块加载失败，退回 forward 模式:', e.message)
 }
 
 // 必须在 app.whenReady 之前设置：userData 路径由它决定。
@@ -495,45 +504,29 @@ function createPetWindow() {
   return petWin
 }
 
-/** 根据原生监听是否可用，切换 pet 窗口的鼠标穿透模式 */
+/** 根据原生 hitTest 是否可用，切换 pet 窗口的鼠标模式 */
 function applyPetMouseMode() {
   if (!petWin) return
-  petWin.setIgnoreMouseEvents(true, { forward: !nativeMouseOK })
-}
-
-/** 屏幕坐标是否落在考拉实体像素上（用渲染进程传来的 alpha 掩膜做精确判定） */
-function hitKoalaAt(sx, sy) {
-  if (!petWin || !petMask) return false
-  const b = petWin.getBounds()
-  const lx = sx - b.x
-  const ly = sy - b.y
-  if (lx < petMask.left || ly < petMask.top) return false
-  const mx = Math.round(lx - petMask.left)
-  const my = Math.round(ly - petMask.top)
-  if (mx < 0 || my < 0 || mx >= petMask.w || my >= petMask.h) return false
-  return petMask.data[my * petMask.w + mx] === 1
-}
-
-/** 把考拉命中区域（屏幕坐标）推给原生模块，让它能拦截落在考拉身上的点击。
- *  full=false 时只同步原点（拖动窗口时的廉价更新）。 */
-function pushNativeRegion(full = true) {
-  if (!nativeMouseOK || !mouseListener || !petWin || !petMask) return
-  const [wx, wy] = petWin.getPosition()
-  const x = wx + petMask.left
-  const y = wy + petMask.top
-  if (full) {
-    // IPC 过来的 data 可能不是 Uint8Array（取决于序列化路径），统一转成原生模块认的 TypedArray
-    const data = petMask.data instanceof Uint8Array ? petMask.data : Uint8Array.from(petMask.data)
-    mouseListener.setRegion(x, y, petMask.w, petMask.h, data)
+  if (hitOK) {
+    // 窗口正常接收事件，但原生 hitTest 已按掩膜把透明区域穿透出去
+    petWin.setIgnoreMouseEvents(false)
   } else {
-    mouseListener.setOrigin(x, y)
+    // 退回 forward：透明区域穿透、考拉区域由 DOM 转发（旧方案，快敲仍可能抢焦点）
+    petWin.setIgnoreMouseEvents(true, { forward: true })
   }
+}
+
+/** 把考拉命中掩膜（窗口内坐标 + alpha 数据）推给原生模块 */
+function pushHitMask(mask) {
+  if (!hitOK || !hitModule) return
+  const data = mask.data instanceof Uint8Array ? mask.data : Uint8Array.from(mask.data)
+  hitModule.setMask(mask.left | 0, mask.top | 0, mask.w | 0, mask.h | 0, data)
 }
 
 /** 渲染进程算好命中掩膜后传过来（窗口内坐标 + alpha 数据） */
 ipcMain.on('pet:set-mask', (_e, mask) => {
   petMask = { left: mask.left, top: mask.top, w: mask.w, h: mask.h, data: mask.data }
-  pushNativeRegion(true)
+  pushHitMask(mask)
 })
 
 /** 开始一次按下：记录偏移，开定时器跟踪位移，长按则开面板 */
@@ -556,8 +549,7 @@ function beginDrag(sx, sy) {
         const nx = c.x - drag.dx
         const ny = c.y - drag.dy
         petWin.setPosition(nx, ny, false)
-        // 窗口在动，原生拦截区域的屏幕原点也要跟着动
-        if (nativeMouseOK && mouseListener && petMask) mouseListener.setOrigin(nx + petMask.left, ny + petMask.top)
+        // 掩膜是窗口内坐标，窗口移动无需重传/重算
       }
     }, 16),
   }
@@ -583,37 +575,21 @@ function endDrag() {
   drag = null
   if (!wasClick) {
     setPetPos(x, y)
-    pushNativeRegion(false) // 拖完落位，最终同步一次原点
     return
   }
   if (held) return
   petWin.webContents.send('pet:click')
 }
 
-/** 原生全局监听回调：code 见 mouse_listener.cc（1=左键下 2=左键上 4=右键下） */
-function handleGlobalMouse(code, x, y) {
-  if (!petWin) return
-  if (code === 1) {
-    if (hitKoalaAt(x, y)) beginDrag(x, y)
-  } else if (code === 2) {
-    endDrag()
-  } else if (code === 4) {
-    if (hitKoalaAt(x, y)) buildMenu().popup({ window: petWin })
-  }
-}
-
-/** 旧 forward 方案的桥接：原生不可用时由渲染进程转发点击 */
+/** 原生 hitTest 接管后，考拉像素上的点击由渲染进程 DOM 转发到这里 */
 ipcMain.on('pet:pointerdown', () => {
-  if (nativeMouseOK) return
   const c = screen.getCursorScreenPoint()
   beginDrag(c.x, c.y)
 })
 ipcMain.on('pet:pointerup', () => {
-  if (nativeMouseOK) return
   endDrag()
 })
 ipcMain.on('pet:contextmenu', () => {
-  if (nativeMouseOK) return
   buildMenu().popup({ window: petWin })
 })
 
@@ -796,39 +772,22 @@ function buildMenu() {
 // 右键考拉弹出菜单。这是托盘之外的第二个入口——菜单栏拥挤时 macOS 会静默丢弃托盘图标，
 // 只靠托盘会导致用户完全找不到设置和退出。
 ipcMain.on('pet:contextmenu', () => {
-  if (nativeMouseOK) return
   buildMenu().popup({ window: petWin })
 })
 
-/** 启动全局鼠标监听（原生模块）。失败（缺模块 / 未授权「输入监控」）则退回 forward 模式。 */
-async function startNativeMouse() {
-  if (process.platform !== 'darwin' || !mouseListener) return
+/** 安装原生 hitTest 重写（形状级穿透）。失败则退回 forward 模式。 */
+function installHit() {
+  if (process.platform !== 'darwin' || !hitModule || !petWin) return
   try {
-    mouseListener.start((code, x, y) => handleGlobalMouse(code, x, y))
-    nativeMouseOK = true
-    console.log('[native mouse] 全局鼠标监听已启用（窗口将永远纯穿透，快敲也不会抢焦点）')
+    const handle = petWin.getNativeWindowHandle()
+    hitModule.install(handle)
+    hitOK = true
+    applyPetMouseMode()
+    console.log('[hit] 形状级穿透已启用（无需系统权限，快敲也不抢焦点）')
   } catch (e) {
-    nativeMouseOK = false
-    console.warn('[native mouse] 启动失败，退回 forward 模式:', e.message)
-    setTimeout(async () => {
-      const { response } = await dialog.showMessageBox({
-        type: 'info',
-        title: '需要「输入监控」权限',
-        message:
-          '功德考拉想在不抢走浏览器焦点的情况下响应你的敲击。\n' +
-          '请在「系统设置 → 隐私与安全性 → 输入监控」中，为「功德考拉」开启权限，然后重启应用。\n' +
-          '（未授权时也能用，只是快速连敲时偶尔会把窗口顶到前面。）',
-        buttons: ['稍后', '去系统设置授权'],
-        defaultId: 1,
-        cancelId: 0,
-      })
-      if (response === 1) {
-        // 直达「输入监控」设置面板
-        shell.openExternal(
-          'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent'
-        )
-      }
-    }, 1500)
+    hitOK = false
+    console.warn('[hit] 安装失败，退回 forward 模式:', e.message)
+    applyPetMouseMode()
   }
 }
 
@@ -854,9 +813,10 @@ app.whenReady().then(async () => {
   app.dock?.hide()
   // 设置 Dock 图标：聊天窗口打开时显示自定义考拉图标，而不是默认 Electron 图标
   app.dock?.setIcon?.(join(ROOT, 'build', 'icon.png'))
-  await startNativeMouse()
   createPetWindow()
   buildTray()
+  // 窗口加载完后安装原生 hitTest 重写（形状级穿透，无需系统权限）
+  petWin.webContents.once('did-finish-load', () => installHit())
   // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）
   setTimeout(autoCheckUpdate, 5000)
   // if (process.env.KOALA_SHOT) devCapture()  // 开发期自检，正常启动不执行

@@ -1,7 +1,7 @@
 {
   "targets": [{
-    "target_name": "mouse_listener",
-    "sources": ["src/native/mouse_listener.cc"],
+    "target_name": "koala_hit",
+    "sources": ["src/native/koala_hit.mm"],
     "cflags": ["-fvisibility=hidden", "-std=c++17"],
     "cflags_cc": ["-fvisibility=hidden", "-std=c++17"],
     "xcode_settings": {
@@ -13,7 +13,7 @@
     "conditions": [
       ["OS=='mac'", {
         "link_settings": {
-          "libraries": ["-framework ApplicationServices", "-framework CoreFoundation"]
+          "libraries": ["-framework Cocoa", "-framework ApplicationServices", "-framework CoreFoundation"]
         }
       }]
     ]

@@ -35,6 +35,10 @@
       "output": "dist"
     },
     "npmRebuild": false,
+    "asar": true,
+    "asarUnpack": [
+      "src/native/**/*.node"
+    ],
     "files": [
       "src/**/*",
       "assets/audio/**",
