@@ -32,6 +32,31 @@ function logStart(...args) {
   try { appendFileSync(join(HOME, 'koala_startup.log'), `[${new Date().toISOString()}] ${args.join(' ')}\n`) } catch {}
 }
 
+// 读取版本号，写入诊断日志以便确认到底跑的是哪个 build
+let BUILD_VERSION = 'dev'
+try { BUILD_VERSION = require(join(ROOT, 'package.json')).version } catch {}
+
+// ── 自替换旧实例：确保永远只跑最新编译版（避免「修了却还在跑旧进程」反复发生）──
+;(function replaceStaleInstance() {
+  try {
+    const me = process.pid
+    const exe = process.execPath
+    let pids = []
+    try {
+      const { execSync } = require('node:child_process')
+      const out = execSync(`pgrep -f "${exe}"`, { encoding: 'utf8' }).trim()
+      pids = out ? out.split('\n').map((s) => parseInt(s, 10)).filter((n) => n && n !== me) : []
+    } catch { /* pgrep 无匹配返回非 0，忽略 */ }
+    for (const p of pids) {
+      try { process.kill(p, 'SIGKILL') } catch (e) { if (e.code !== 'ESRCH') {} }
+    }
+    if (pids.length) logStart(`[boot] 已终止旧实例 ${pids.join(',')}，确保运行最新版`)
+    logStart(`===== 功德考拉启动 v${BUILD_VERSION} (pid=${me}) =====`)
+  } catch (e) {
+    logStart('[boot] 自替换检查出错:', e.message)
+  }
+})()
+
 // ── 形状级鼠标穿透（原生模块）─────────────────────────
 // 用原生模块重写 pet 窗口内容视图的 hitTest:，仅考拉实体像素接收点击，
 // 透明区域直接穿透到下层（浏览器/桌面）。不需要任何系统权限（无需「输入监控」），
@@ -518,16 +543,13 @@ function createPetWindow() {
   return petWin
 }
 
-/** 根据原生 hitTest 是否可用，切换 pet 窗口的鼠标模式 */
+/** 根据原生 hitTest 是否可用，切换 pet 窗口的鼠标模式。
+ *  关键：窗口始终接收事件（考拉永远可点）。原生 hitTest 安装成功时，只有窗口最外圈
+ *  空白会由 hitTest 返回 nil 穿透到下层；安装失败/掩膜异常时则整窗可点（考拉照常可用，
+ *  仅失去形状穿透）。两种情况下考拉都一定能敲击，杜绝「死悬浮、点哪都没反应」。 */
 function applyPetMouseMode() {
   if (!petWin) return
-  if (hitOK) {
-    // 窗口正常接收事件，但原生 hitTest 已按掩膜把透明区域穿透出去
-    petWin.setIgnoreMouseEvents(false)
-  } else {
-    // 退回 forward：透明区域穿透、考拉区域由 DOM 转发（旧方案，快敲仍可能抢焦点）
-    petWin.setIgnoreMouseEvents(true, { forward: true })
-  }
+  petWin.setIgnoreMouseEvents(false)
 }
 
 /** 把考拉命中掩膜（窗口内坐标 + alpha 数据）推给原生模块 */
@@ -540,6 +562,16 @@ function pushHitMask(mask) {
 /** 渲染进程算好命中掩膜后传过来（窗口内坐标 + alpha 数据） */
 ipcMain.on('pet:set-mask', (_e, mask) => {
   petMask = { left: mask.left, top: mask.top, w: mask.w, h: mask.h, data: mask.data }
+  let ones = 0
+  const d = mask.data
+  const total = (mask.w * mask.h) || 0
+  if (d && d.length) for (let i = 0; i < d.length; i++) if (d[i]) ones++
+  logStart(`[mask] 收到掩膜 ${mask.w}x${mask.h} 实体像素=${ones}/${total} (left=${mask.left}, top=${mask.top})`)
+  // 掩膜异常（全 0 或尺寸不符）时强制整窗可点，避免考拉变成死悬浮
+  if (!ones) {
+    logStart('[mask] 警告：掩膜全空，强制整窗可点（形状穿透降级）')
+    return
+  }
   pushHitMask(mask)
 })
 
