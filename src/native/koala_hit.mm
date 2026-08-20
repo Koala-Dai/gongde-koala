@@ -199,6 +199,58 @@ static napi_value Install(napi_env env, napi_callback_info info) {
   return NULL;
 }
 
+/** 从掩膜构建点击区域 CGPath（content 坐标系，原点左下）。
+ *  按行 span 生成 1px 高的矩形，矩形合并由系统 path 处理；返回矩形数量。 */
+static int BuildMaskPath(NSView* cv, CGMutablePathRef path) {
+  int rects = 0;
+  if (!g_enabled || !g_mask || g_w <= 0 || g_h <= 0) return rects;
+  CGFloat H = cv.bounds.size.height;
+  CGFloat y0 = H - (CGFloat)g_top - (CGFloat)g_h;   // 掩膜底边（content 左下 y）
+  for (int my = 0; my < g_h; my++) {
+    int x = 0;
+    while (x < g_w) {
+      if (g_mask[(size_t)my * g_w + x]) {
+        int x0 = x;
+        while (x < g_w && g_mask[(size_t)my * g_w + x]) x++;
+        CGPathAddRect(path, NULL, CGRectMake((CGFloat)(g_left + x0),
+                                             y0 + (CGFloat)my,
+                                             (CGFloat)(x - x0), 1.0));
+        rects++;
+      } else {
+        x++;
+      }
+    }
+  }
+  return rects;
+}
+
+/** macOS 14+：把窗口点击区域限制为考拉轮廓（系统级穿透）。
+ *  setContentShape:path: 是 Swift-only API，用 runtime selector 动态调用：
+ *     [window setContentShape:NSWindow.ContentShape.default(0) path:cgPath]
+ *  轮廓外点击由 WindowServer 直接穿透到下层，不经过任何事件处理——这是根治方案。 */
+static void ApplyContentShape(NSView* cv) {
+  if (!cv) return;
+  NSWindow* win = [cv window];
+  if (!win) return;
+  SEL sel = NSSelectorFromString(@"setContentShape:path:");
+  if (!sel || ![win respondsToSelector:sel]) {
+    nlog("setContentShape: 本机不支持该 API (sel=%p)", (void*)sel);
+    return;
+  }
+  CGMutablePathRef path = CGPathCreateMutable();
+  int rects = BuildMaskPath(cv, path);
+  if (rects == 0) {
+    CGPathRelease(path);
+    // 掩膜为空 → 不做任何限制（整窗默认）
+    nlog("setContentShape: 掩膜为空，跳过");
+    return;
+  }
+  typedef void (*shapeFn)(id, SEL, NSInteger, CGPathRef);
+  ((shapeFn)objc_msgSend)(win, sel, (NSInteger)0, path);   // NSWindow.ContentShape.default == 0
+  nlog("setContentShape: 已设置考拉轮廓点击区 (rects=%d, %dx%d)", rects, g_w, g_h);
+  CGPathRelease(path);
+}
+
 static napi_value SetMask(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value argv[5];
@@ -234,6 +286,8 @@ static napi_value SetMask(napi_env env, napi_callback_info info) {
     g_maskLen = dlen;
     g_enabled = true;
     nlog("setMask: %dx%d left=%d top=%d (enabled)", w, h, left, top);
+    // 关键：掩膜到达后立刻把窗口点击区域限制为考拉轮廓（系统级穿透）
+    ApplyContentShape(g_view);
   } else {
     g_enabled = false;
     nlog("setMask: 尺寸不符 %dx%d dlen=%zu → 未启用", w, h, dlen);
