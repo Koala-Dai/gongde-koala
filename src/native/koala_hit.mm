@@ -36,18 +36,26 @@ static NSView* koalaHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
     NSRect b = [self bounds];
     CGFloat H = b.size.height;
     CGFloat pty = H - point.y;   // 翻到左上原点，与掩膜一致
-    // 落在掩膜矩形之外（一定是窗口的外圈空白）→ 穿透到下层，让下方的浏览器/桌面可点
+    // 矩形粗筛：矩形外一定是窗口外圈空白 → 穿透到下层
     if (point.x < g_left || point.x > g_left + g_w ||
         pty < g_top  || pty > g_top + g_h) {
       return nil;
     }
-    // 在矩形内：无论掩膜是否精确，都交给原始命中（保证考拉一定可点）。
-    // 这样即便掩膜坐标有偏差，敲击/拖拽/长按也始终有效；只有窗口最外圈空白才穿透。
-    if (g_origHitTest) {
-      typedef NSView* (*fnT)(id, SEL, NSPoint, NSEvent*);
-      return ((fnT)g_origHitTest)(self, _cmd, point, event);
+    // 矩形内：逐像素查掩膜，只拦截考拉实体像素（alpha 非透明）。
+    // 考拉精灵图是方形、四周大量透明留白——这些透明像素必须穿透到下层，
+    // 否则「考拉附近」会变成一层点不透的透明隔层。
+    int mx = (int)round(point.x - g_left);
+    int my = (int)round(pty - g_top);
+    if (mx >= 0 && my >= 0 && mx < g_w && my < g_h && g_mask[(size_t)my * g_w + mx]) {
+      // 考拉实体像素：交原始命中，DOM 正常收到点击
+      if (g_origHitTest) {
+        typedef NSView* (*fnT)(id, SEL, NSPoint, NSEvent*);
+        return ((fnT)g_origHitTest)(self, _cmd, point, event);
+      }
+      return self;
     }
-    return self;
+    // 透明像素：穿透到下层（点考拉旁边的按钮/链接/桌面都有反应）
+    return nil;
   }
   // 未启用掩膜（加载期过渡态）：原样行为，整窗接收事件
   if (g_origHitTest) {
