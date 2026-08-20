@@ -823,20 +823,33 @@ function buildTray() {
 
 app.whenReady().then(async () => {
   logStart('[boot] app.whenReady 已触发')
-  initStore()
-  // 首次启动不内置任何 Key：让用户在本机「设置」里填入自己的 DeepSeek Key。
-  // 不要把密钥写进源码——会随仓库 / 分享包一起泄露。
-  // 桌宠不需要 Dock 图标，常驻托盘即可
-  app.dock?.hide()
-  // 设置 Dock 图标：聊天窗口打开时显示自定义考拉图标，而不是默认 Electron 图标
-  app.dock?.setIcon?.(join(ROOT, 'build', 'icon.png'))
-  createPetWindow()
-  buildTray()
-  // 窗口加载完后安装原生 hitTest 重写（形状级穿透，无需系统权限）
-  petWin.webContents.once('did-finish-load', () => installHit())
-  // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）
-  setTimeout(autoCheckUpdate, 5000)
-  // if (process.env.KOALA_SHOT) devCapture()  // 开发期自检，正常启动不执行
+  try {
+    initStore()
+    // 首次启动不内置任何 Key：让用户在本机「设置」里填入自己的 DeepSeek Key。
+    // 不要把密钥写进源码——会随仓库 / 分享包一起泄露。
+    // 桌宠不需要 Dock 图标，常驻托盘即可
+    app.dock?.hide()
+    // 设置 Dock 图标：聊天窗口打开时显示自定义考拉图标，而不是默认 Electron 图标。
+    // 注意：打包后 build/icon.png 不一定随 asar 一起存在，文件不存在时 setIcon 会同步抛异常，
+    // 必须把「存在判断 + try/catch」兜住，否则会连累整个 whenReady 崩掉、考拉窗口创建不出来。
+    try {
+      const dockIcon = join(ROOT, 'build', 'icon.png')
+      if (existsSync(dockIcon)) app.dock?.setIcon?.(dockIcon)
+    } catch (e) {
+      logStart('[boot] setIcon 跳过:', e.message)
+    }
+    createPetWindow()
+    buildTray()
+    // 窗口加载完后安装原生 hitTest 重写（形状级穿透，无需系统权限）
+    petWin.webContents.once('did-finish-load', () => installHit())
+    // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）
+    setTimeout(autoCheckUpdate, 5000)
+    // if (process.env.KOALA_SHOT) devCapture()  // 开发期自检，正常启动不执行
+  } catch (e) {
+    // 任何启动异常都写进诊断日志，避免「打开没反应」却无从排查
+    logStart('[boot] 启动异常:', e && (e.stack || e.message))
+    console.error('[boot] 启动异常:', e)
+  }
 })
 
 /**
