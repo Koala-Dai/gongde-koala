@@ -783,11 +783,7 @@ function buildMenu() {
   ])
 }
 
-// 右键考拉弹出菜单。这是托盘之外的第二个入口——菜单栏拥挤时 macOS 会静默丢弃托盘图标，
-// 只靠托盘会导致用户完全找不到设置和退出。
-ipcMain.on('pet:contextmenu', () => {
-  buildMenu().popup({ window: petWin })
-})
+// 右键考拉弹出菜单在上方 pointer 段落已注册（ipcMain.on('pet:contextmenu')），此处不再重复。
 
 /** 安装原生 hitTest 重写（形状级穿透）。失败则退回 forward 模式。 */
 function installHit() {

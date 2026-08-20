@@ -92,19 +92,23 @@ static napi_value Install(napi_env env, napi_callback_info info) {
 
   Class origCls = [view class];
   if (g_subCls == NULL) {
-    Method m = class_getInstanceMethod(origCls, @selector(hitTest:withEvent:));
-    if (!m) {
-      napi_throw_error(env, NULL, "install: hitTest:withEvent: not found");
+    // 从 NSView 基类取 hitTest:withEvent: 的实现。某些 Electron 版本的内容视图类
+    // 用 class_getInstanceMethod 直接查不到这个方法（"not found"），但只要它是 NSView
+    // 子类，基类的实现一定可用——用基类的实现当「原始实现」即可，调用时对普通视图
+    // 会正确返回命中子视图（webview），从而让 DOM 正常收到点击。
+    Method baseM = class_getInstanceMethod([NSView class], @selector(hitTest:withEvent:));
+    if (!baseM) {
+      napi_throw_error(env, NULL, "install: NSView hitTest:withEvent: not found");
       return NULL;
     }
-    g_origHitTest = method_getImplementation(m);
+    g_origHitTest = method_getImplementation(baseM);
     g_subCls = objc_allocateClassPair(origCls, "KoalaHitView", 0);
     if (!g_subCls) {
       napi_throw_error(env, NULL, "install: objc_allocateClassPair failed");
       return NULL;
     }
     class_addMethod(g_subCls, @selector(hitTest:withEvent:),
-                    (IMP)koalaHitTest, method_getTypeEncoding(m));
+                    (IMP)koalaHitTest, method_getTypeEncoding(baseM));
     objc_registerClassPair(g_subCls);
   }
 
