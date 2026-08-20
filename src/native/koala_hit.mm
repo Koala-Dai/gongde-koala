@@ -1,34 +1,67 @@
 // macOS 形状级点击穿透（纯 N-API + Objective-C++，无第三方依赖）。
 //
 // 思路：重写 pet 窗口内容视图的 -hitTest:withEvent:。
-//   - 点击落在考拉实体像素（alpha 掩膜为 1）→ 返回原始命中视图，事件交给窗口，
+//   - 点击落在考拉实体像素（alpha 掩膜为 1）→ 调用父类(NSView)原始实现，事件交给窗口，
 //     DOM 的 mousedown/up 正常触发（敲木鱼、拖拽、长按都靠它）。
-//   - 点击落在透明区域（掩膜为 0）→ 返回 nil，事件穿透到下层窗口（浏览器/桌面），
-//     于是「考拉旁边的空白」能点到下面的应用，点真的空桌面也照常工作。
+//   - 点击落在透明像素（掩膜为 0 / 矩形外）→ 返回 nil，事件穿透到下层窗口（浏览器/桌面），
+//     于是「考拉旁边的空白」能点到下面的应用。
 //
 // 关键点：窗口本身是 NSPanel + focusable:false，所以即使收到点击也不会激活 app、
 // 不会抢走浏览器焦点；而透明区域因为 hitTest 返回 nil，压根不会落到本窗口。
-// 这一整套不需要「输入监控」等任何系统隐私权限，比 CGEventTap 拦截稳得多。
+// 这一整套不需要「输入监控」等任何系统隐私权限。
 //
 // 坐标说明：hitTest: 的 point 是视图本地坐标（原点左下、单位 point）；
 // 渲染进程传来的掩膜是「窗口内左上原点」的 0/1 数据，故 y 需要翻转：
 //   mask_x = point.x - left
 //   mask_y = (bounds.height - point.y) - top
+//
+// 历史教训：
+//   - 陷阱：class_getInstanceMethod([view class], hitTest:withEvent:) 在部分 Electron
+//     运行时返回 NULL（"not found"）→ install 失败 → 整条穿透逻辑失效。
+//   - 修法①：改从 [NSView class] 取——仍偶发 NULL（原因未明，见 koala_native.log 诊断）。
+//   - 修法②（当前）：彻底不用 class_getInstanceMethod/method_getImplementation，
+//     命中实体像素时用 objc_msgSendSuper 直接走 [NSView class] 的实现。父类方法必然存在，
+//     不依赖任何"取方法"查询，最稳。
 
 #include <node_api.h>
 #include <Cocoa/Cocoa.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 static void* g_view = NULL;          // 已安装 hitTest 重写的 NSView
 static Class g_subCls = NULL;        // 动态创建的子类 KoalaHitView
-static IMP g_origHitTest = NULL;     // 原始 hitTest: 实现（保留以返回正确命中目标）
 
 static int g_left = 0, g_top = 0, g_w = 0, g_h = 0;
 static uint8_t* g_mask = NULL;
 static size_t g_maskLen = 0;
 static bool g_enabled = false;
+
+// 原生侧诊断日志：写到 ~/koala_native.log（与主进程 ~/koala_startup.log 互补）
+static void nlog(const char* fmt, ...) {
+  char buf[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  const char* home = getenv("HOME");
+  if (!home) home = "/tmp";
+  char path[2048];
+  snprintf(path, sizeof(path), "%s/koala_native.log", home);
+  FILE* f = fopen(path, "a");
+  if (f) { fprintf(f, "[%ld] %s\n", (long)time(NULL), buf); fclose(f); }
+}
+
+/** 调用 [NSView class] 的 hitTest:withEvent: 原始实现（跳过子类 override）。
+ *  objc_msgSendSuper 只查父类 IMP 并跳转，参数寄存器原样传递，无需 IMP 签名处理。 */
+static NSView* callSuperHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
+  struct objc_super sup = { self, [NSView class] };
+  typedef NSView* (*superHitFn)(struct objc_super*, SEL, NSPoint, NSEvent*);
+  return ((superHitFn)objc_msgSendSuper)(&sup, _cmd, point, event);
+}
 
 static NSView* koalaHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
   bool enabled = g_enabled && g_mask && g_w > 0 && g_h > 0;
@@ -47,22 +80,14 @@ static NSView* koalaHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
     int mx = (int)round(point.x - g_left);
     int my = (int)round(pty - g_top);
     if (mx >= 0 && my >= 0 && mx < g_w && my < g_h && g_mask[(size_t)my * g_w + mx]) {
-      // 考拉实体像素：交原始命中，DOM 正常收到点击
-      if (g_origHitTest) {
-        typedef NSView* (*fnT)(id, SEL, NSPoint, NSEvent*);
-        return ((fnT)g_origHitTest)(self, _cmd, point, event);
-      }
-      return self;
+      // 考拉实体像素：走父类原始命中（返回命中的子视图，DOM 收到点击）
+      return callSuperHitTest(self, _cmd, point, event);
     }
     // 透明像素：穿透到下层（点考拉旁边的按钮/链接/桌面都有反应）
     return nil;
   }
   // 未启用掩膜（加载期过渡态）：原样行为，整窗接收事件
-  if (g_origHitTest) {
-    typedef NSView* (*fnT)(id, SEL, NSPoint, NSEvent*);
-    return ((fnT)g_origHitTest)(self, _cmd, point, event);
-  }
-  return self;
+  return callSuperHitTest(self, _cmd, point, event);
 }
 
 static napi_value Install(napi_env env, napi_callback_info info) {
@@ -89,36 +114,39 @@ static napi_value Install(napi_env env, napi_callback_info info) {
   // getNativeWindowHandle() 在 macOS 上可能返回 NSWindow* 或 NSView*，两种都兼容。
   id obj = (__bridge id)ptr;
   NSView* view = nil;
-  if ([obj isKindOfClass:[NSWindow class]]) {
+  BOOL isWin = [obj isKindOfClass:[NSWindow class]];
+  BOOL isView = [obj isKindOfClass:[NSView class]];
+  if (isWin) {
     view = [(NSWindow*)obj contentView];
-  } else if ([obj isKindOfClass:[NSView class]]) {
+  } else if (isView) {
     view = (NSView*)obj;
   }
+  nlog("install: handle obj=%p isWindow=%d isView=%d contentView=%p",
+       (void*)obj, (int)isWin, (int)isView, (void*)view);
   if (!view) {
     napi_throw_error(env, NULL, "install: cannot resolve NSView");
     return NULL;
   }
 
   Class origCls = [view class];
+  // 诊断：确认 NSView 类对象与 hitTest:withEvent: 查询结果（历史偶发 NULL）
+  Class baseCls = NSClassFromString(@"NSView");
+  Method baseM = baseCls ? class_getInstanceMethod(baseCls, @selector(hitTest:withEvent:)) : NULL;
+  nlog("install: viewClass=%s NSClassFromString(NSView)=%p getInstanceMethod(hitTest)=%p",
+       class_getName(origCls), (void*)baseCls, (void*)baseM);
+
   if (g_subCls == NULL) {
-    // 从 NSView 基类取 hitTest:withEvent: 的实现。某些 Electron 版本的内容视图类
-    // 用 class_getInstanceMethod 直接查不到这个方法（"not found"），但只要它是 NSView
-    // 子类，基类的实现一定可用——用基类的实现当「原始实现」即可，调用时对普通视图
-    // 会正确返回命中子视图（webview），从而让 DOM 正常收到点击。
-    Method baseM = class_getInstanceMethod([NSView class], @selector(hitTest:withEvent:));
-    if (!baseM) {
-      napi_throw_error(env, NULL, "install: NSView hitTest:withEvent: not found");
-      return NULL;
-    }
-    g_origHitTest = method_getImplementation(baseM);
+    // 动态子类：仅重写 hitTest:withEvent:。typeEncoding 硬编码为 NSView 的标准签名
+    // （"@@:@{CGPoint=dd}"），运行时按 IMP 直接调用不受影响。
     g_subCls = objc_allocateClassPair(origCls, "KoalaHitView", 0);
     if (!g_subCls) {
       napi_throw_error(env, NULL, "install: objc_allocateClassPair failed");
       return NULL;
     }
     class_addMethod(g_subCls, @selector(hitTest:withEvent:),
-                    (IMP)koalaHitTest, method_getTypeEncoding(baseM));
+                    (IMP)koalaHitTest, "@@:@{CGPoint=dd}");
     objc_registerClassPair(g_subCls);
+    nlog("install: KoalaHitView 子类已注册 (parent=%s)", class_getName(origCls));
   }
 
   // 仅把本实例的类切到子类（不影响其它窗口）
@@ -126,6 +154,7 @@ static napi_value Install(napi_env env, napi_callback_info info) {
     object_setClass(view, g_subCls);
   }
   g_view = (__bridge void*)view;
+  nlog("install: OK，已安装到 %p (class=%s)", (void*)view, class_getName(g_subCls));
   return NULL;
 }
 
@@ -163,8 +192,10 @@ static napi_value SetMask(napi_env env, napi_callback_info info) {
     memcpy(g_mask, data, dlen);
     g_maskLen = dlen;
     g_enabled = true;
+    nlog("setMask: %dx%d left=%d top=%d (enabled)", w, h, left, top);
   } else {
     g_enabled = false;
+    nlog("setMask: 尺寸不符 %dx%d dlen=%zu → 未启用", w, h, dlen);
   }
   return NULL;
 }
