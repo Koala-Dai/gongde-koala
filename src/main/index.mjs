@@ -809,7 +809,6 @@ function buildMenu() {
     { label: '🐨 中考拉（默认）', click: () => changeScale(1.0) },
     { label: '🐨 大考拉', click: () => changeScale(1.4) },
     { type: 'separator' },
-    { label: '🔄 检查更新', click: async () => { const info = await checkForUpdate(); showUpdateToast(info) } },
     { label: '打开数据文件夹', click: () => shell.openPath(app.getPath('userData')) },
     { label: '退出功德考拉', role: 'quit' },
   ])
