@@ -57,27 +57,16 @@ try { BUILD_VERSION = require(join(ROOT, 'package.json')).version } catch {}
   }
 })()
 
-// ── 形状级鼠标穿透（原生模块）─────────────────────────
-// 用原生模块重写 pet 窗口内容视图的 hitTest:，仅考拉实体像素接收点击，
-// 透明区域直接穿透到下层（浏览器/桌面）。不需要任何系统权限（无需「输入监控」），
-// 比 CGEventTap 拦截稳得多。模块缺失/安装失败时退回旧 forward 方案。
-let hitOK = false
+// ── 形状级鼠标穿透（主进程轮询驱动）────────────────────
+// 不再依赖原生模块/窗口 hitTest 重写（AppKit 鼠标事件分发不走公开 hitTest:，
+// setContentShape 又是 Swift-only 不可调用，两条路都验证过走不通）。
+// 方案：主进程用 screen.getCursorScreenPoint() 轮询鼠标位置（Electron 内置、
+// 无需任何系统权限），命中考拉实体像素（掩膜）时窗口接收事件，否则窗口穿透
+// （setIgnoreMouseEvents(true)）——点击直达下层浏览器/桌面。拖拽期间强制接收。
 let petMask = null // { left, top, w, h, data: Uint8Array } 窗口内坐标下的考拉实体 alpha 掩膜
-let hitModule = null
-try {
-  // 开发期：.node 在 src/native/ 下，ROOT 即项目根。
-  // 打包后：asarUnpack 把 .node 解到 app.asar.unpacked 同级目录（asar 内只留引用），
-  // 所以要先试 asar 内路径，失败再试 unpacked 路径，否则会 require 失败、回退到 forward 模式。
-  let hitPath = join(ROOT, 'src', 'native', 'koala_hit.node')
-  if (!existsSync(hitPath)) {
-    hitPath = join(ROOT, '..', 'app.asar.unpacked', 'src', 'native', 'koala_hit.node')
-  }
-  hitModule = require(hitPath)
-  logStart('[hit] 原生模块加载成功:', hitPath)
-} catch (e) {
-  console.warn('[hit] 原生模块加载失败，退回 forward 模式:', e.message)
-  logStart('[hit] 原生模块加载失败:', e.message)
-}
+let mousePollTimer = null
+let dragActive = false   // 拖拽中强制窗口接收事件（拖动不中断）
+let lastPetHit = true    // 上一次判定结果，变化时才切换（避免无谓抖动）
 
 // 必须在 app.whenReady 之前设置：userData 路径由它决定。
 // 不设的话所有开发中的 Electron 应用会共用 ~/Library/Application Support/Electron，
@@ -533,9 +522,9 @@ function createPetWindow() {
   petWin.setAlwaysOnTop(true, 'screen-saver')
   petWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
-  // 默认穿透。原生监听可用时窗口纯穿透（不接收事件、绝不激活 app）；
-  // 不可用时退回 forward，由渲染进程接管点击（旧方案，快敲仍可能抢焦点）。
-  applyPetMouseMode()
+  // 初始穿透；鼠标轮询(startMouseRegionPoll)会按鼠标位置动态切换接收/穿透
+  lastPetHit = true
+  petWin.setIgnoreMouseEvents(true)
 
   petWin.loadFile(join(ROOT, 'src', 'renderer', 'pet', 'index.html'))
   petWin.on('closed', () => { petWin = null })
@@ -543,20 +532,34 @@ function createPetWindow() {
   return petWin
 }
 
-/** 根据原生 hitTest 是否可用，切换 pet 窗口的鼠标模式。
- *  关键：窗口始终接收事件（考拉永远可点）。原生 hitTest 安装成功时，只有窗口最外圈
- *  空白会由 hitTest 返回 nil 穿透到下层；安装失败/掩膜异常时则整窗可点（考拉照常可用，
- *  仅失去形状穿透）。两种情况下考拉都一定能敲击，杜绝「死悬浮、点哪都没反应」。 */
-function applyPetMouseMode() {
-  if (!petWin) return
-  petWin.setIgnoreMouseEvents(false)
+/** 屏幕坐标是否落在考拉实体像素上（掩膜精确判定） */
+function hitKoalaAt(sx, sy) {
+  if (!petWin || !petMask) return false
+  const b = petWin.getBounds()
+  const lx = sx - b.x
+  const ly = sy - b.y
+  if (lx < petMask.left || ly < petMask.top) return false
+  const mx = Math.round(lx - petMask.left)
+  const my = Math.round(ly - petMask.top)
+  if (mx < 0 || my < 0 || mx >= petMask.w || my >= petMask.h) return false
+  return petMask.data[my * petMask.w + mx] === 1
 }
 
-/** 把考拉命中掩膜（窗口内坐标 + alpha 数据）推给原生模块 */
-function pushHitMask(mask) {
-  if (!hitOK || !hitModule) return
-  const data = mask.data instanceof Uint8Array ? mask.data : Uint8Array.from(mask.data)
-  hitModule.setMask(mask.left | 0, mask.top | 0, mask.w | 0, mask.h | 0, data)
+/** 应用当前鼠标命中状态：命中考拉 → 窗口接收事件；否则 → 窗口穿透 */
+function applyPetMouseHit(hit) {
+  if (!petWin || hit === lastPetHit) return
+  lastPetHit = hit
+  petWin.setIgnoreMouseEvents(!hit)
+}
+
+/** 轮询鼠标位置，动态切换窗口穿透/接收（33ms，无需任何系统权限） */
+function startMouseRegionPoll() {
+  if (mousePollTimer) return
+  mousePollTimer = setInterval(() => {
+    if (!petWin || petWin.isDestroyed()) return
+    const c = screen.getCursorScreenPoint()
+    applyPetMouseHit(hitKoalaAt(c.x, c.y) || dragActive)
+  }, 33)
 }
 
 /** 渲染进程算好命中掩膜后传过来（窗口内坐标 + alpha 数据） */
@@ -570,14 +573,15 @@ ipcMain.on('pet:set-mask', (_e, mask) => {
   // 掩膜异常（全 0 或尺寸不符）时强制整窗可点，避免考拉变成死悬浮
   if (!ones) {
     logStart('[mask] 警告：掩膜全空，强制整窗可点（形状穿透降级）')
-    return
+    if (petWin) { lastPetHit = true; petWin.setIgnoreMouseEvents(false) }
   }
-  pushHitMask(mask)
 })
 
 /** 开始一次按下：记录偏移，开定时器跟踪位移，长按则开面板 */
 function beginDrag(sx, sy) {
   if (!petWin) return
+  dragActive = true                       // 拖拽期间强制窗口接收事件（不中断拖动）
+  if (petWin) petWin.setIgnoreMouseEvents(false)
   const [wx, wy] = petWin.getPosition()
   drag = {
     dx: sx - wx,
@@ -619,6 +623,7 @@ function endDrag() {
   const [x, y] = petWin.getPosition()
   const held = drag.held
   drag = null
+  dragActive = false                      // 松开后恢复按鼠标位置判定
   if (!wasClick) {
     setPetPos(x, y)
     return
@@ -816,24 +821,6 @@ function buildMenu() {
 
 // 右键考拉弹出菜单在上方 pointer 段落已注册（ipcMain.on('pet:contextmenu')），此处不再重复。
 
-/** 安装原生 hitTest 重写（形状级穿透）。失败则退回 forward 模式。 */
-function installHit() {
-  if (process.platform !== 'darwin' || !hitModule || !petWin) return
-  try {
-    const handle = petWin.getNativeWindowHandle()
-    hitModule.install(handle)
-    hitOK = true
-    applyPetMouseMode()
-    console.log('[hit] 形状级穿透已启用（无需系统权限，快敲也不抢焦点）')
-    logStart('[hit] install OK — 形状级穿透已启用')
-  } catch (e) {
-    hitOK = false
-    console.warn('[hit] 安装失败，退回 forward 模式:', e.message)
-    logStart('[hit] install 失败，退回 forward:', e.message)
-    applyPetMouseMode()
-  }
-}
-
 function buildTray() {
   const iconPath = join(ROOT, 'assets', 'koala', 'trayTemplate.png')
   tray = new Tray(iconPath)
@@ -867,8 +854,9 @@ app.whenReady().then(async () => {
     }
     createPetWindow()
     buildTray()
-    // 窗口加载完后安装原生 hitTest 重写（形状级穿透，无需系统权限）
-    petWin.webContents.once('did-finish-load', () => installHit())
+    // 开始轮询鼠标位置：命中考拉时窗口接收事件，否则穿透（无需任何系统权限）
+    startMouseRegionPoll()
+    logStart('[boot] 鼠标区域轮询已启动')
     // 启动 5 秒后静默检查更新（用户已忽略的版本不再弹窗）
     setTimeout(autoCheckUpdate, 5000)
     // if (process.env.KOALA_SHOT) devCapture()  // 开发期自检，正常启动不执行
