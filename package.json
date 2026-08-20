@@ -21,6 +21,7 @@
     "macos"
   ],
   "license": "ISC",
+  "gypfile": false,
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
