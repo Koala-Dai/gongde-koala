@@ -3,6 +3,9 @@ import { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog } from '
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
+// ESM 模块里没有全局 require，加载 .node 原生模块必须用 createRequire 造一个
+const require = createRequire(import.meta.url)
 import {
   initStore, flushNow, recordKnock, getDay, getTotal,
   getPetPos, setPetPos, getSettings, setSettings, recentDays,
@@ -22,6 +25,13 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
 
+// 启动诊断日志：写到用户家目录，便于在沙箱外（真机 GUI 会话）也能读到的地方追踪启动到哪一步。
+import { appendFileSync } from 'node:fs'
+const HOME = process.env.HOME || '/tmp'
+function logStart(...args) {
+  try { appendFileSync(join(HOME, 'koala_startup.log'), `[${new Date().toISOString()}] ${args.join(' ')}\n`) } catch {}
+}
+
 // ── 形状级鼠标穿透（原生模块）─────────────────────────
 // 用原生模块重写 pet 窗口内容视图的 hitTest:，仅考拉实体像素接收点击，
 // 透明区域直接穿透到下层（浏览器/桌面）。不需要任何系统权限（无需「输入监控」），
@@ -38,8 +48,10 @@ try {
     hitPath = join(ROOT, '..', 'app.asar.unpacked', 'src', 'native', 'koala_hit.node')
   }
   hitModule = require(hitPath)
+  logStart('[hit] 原生模块加载成功:', hitPath)
 } catch (e) {
   console.warn('[hit] 原生模块加载失败，退回 forward 模式:', e.message)
+  logStart('[hit] 原生模块加载失败:', e.message)
 }
 
 // 必须在 app.whenReady 之前设置：userData 路径由它决定。
@@ -456,6 +468,7 @@ ipcMain.handle('chat:reset', () => {
 })
 
 function createPetWindow() {
+  logStart('[boot] createPetWindow 开始')
   const saved = getPetPos()
   const area = screen.getPrimaryDisplay().workArea
   // 首次启动放在右下角，离边缘留点距离
@@ -501,6 +514,7 @@ function createPetWindow() {
 
   petWin.loadFile(join(ROOT, 'src', 'renderer', 'pet', 'index.html'))
   petWin.on('closed', () => { petWin = null })
+  logStart('[boot] pet 窗口已创建并 loadFile')
   return petWin
 }
 
@@ -784,9 +798,11 @@ function installHit() {
     hitOK = true
     applyPetMouseMode()
     console.log('[hit] 形状级穿透已启用（无需系统权限，快敲也不抢焦点）')
+    logStart('[hit] install OK — 形状级穿透已启用')
   } catch (e) {
     hitOK = false
     console.warn('[hit] 安装失败，退回 forward 模式:', e.message)
+    logStart('[hit] install 失败，退回 forward:', e.message)
     applyPetMouseMode()
   }
 }
@@ -806,6 +822,7 @@ function buildTray() {
 }
 
 app.whenReady().then(async () => {
+  logStart('[boot] app.whenReady 已触发')
   initStore()
   // 首次启动不内置任何 Key：让用户在本机「设置」里填入自己的 DeepSeek Key。
   // 不要把密钥写进源码——会随仓库 / 分享包一起泄露。
