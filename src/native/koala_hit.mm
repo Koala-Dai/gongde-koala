@@ -1,27 +1,29 @@
 // macOS 形状级点击穿透（纯 N-API + Objective-C++，无第三方依赖）。
 //
-// 思路：重写 pet 窗口内容视图的 -hitTest:withEvent:。
-//   - 点击落在考拉实体像素（alpha 掩膜为 1）→ 调用父类(NSView)原始实现，事件交给窗口，
-//     DOM 的 mousedown/up 正常触发（敲木鱼、拖拽、长按都靠它）。
-//   - 点击落在透明像素（掩膜为 0 / 矩形外）→ 返回 nil，事件穿透到下层窗口（浏览器/桌面），
-//     于是「考拉旁边的空白」能点到下面的应用。
+// 双层 hitTest 重写（这是「透明区域点击穿透到下层」的关键）：
+//   - NSWindow 级（KoalaHitWindow，重写 -hitTest:）：
+//       点击落在透明像素 → 返回 nil → 窗口拒绝事件，AppKit 继续把点击交给下层窗口
+//       （浏览器/桌面），这是 macOS 上实现「窗口某区域点击穿透」的标准机制。
+//       点击落在考拉实体像素 → 返回内容视图命中结果 → 事件进入本窗口。
+//   - NSView 级（KoalaHitView，重写 -hitTest:withEvent:）：
+//       实体像素 → objc_msgSendSuper 走父类原始命中（返回 webview 子视图，
+//       DOM 的 mousedown/up 正常触发：敲木鱼、拖拽、长按都靠它）。
 //
-// 关键点：窗口本身是 NSPanel + focusable:false，所以即使收到点击也不会激活 app、
-// 不会抢走浏览器焦点；而透明区域因为 hitTest 返回 nil，压根不会落到本窗口。
-// 这一整套不需要「输入监控」等任何系统隐私权限。
+// 关键点：窗口是 NSPanel + focusable:false，收到点击不会激活 app、不抢焦点；
+// 透明像素在窗口级就返回 nil，事件穿透到下层。整套不需要任何系统隐私权限。
 //
-// 坐标说明：hitTest: 的 point 是视图本地坐标（原点左下、单位 point）；
-// 渲染进程传来的掩膜是「窗口内左上原点」的 0/1 数据，故 y 需要翻转：
-//   mask_x = point.x - left
-//   mask_y = (bounds.height - point.y) - top
+// 历史教训（决定性的）：
+//   只重写内容视图的 hitTest 返回 nil，事件并不会穿透——NSWindow 自己仍在接收
+//   鼠标事件，点击被窗口吞掉。必须同时重写 NSWindow 的 hitTest: 返回 nil。
+//   class_getInstanceMethod 在 Electron 的 BridgedContentView 上返回 NULL（"not
+//   found"），所以父类实现一律用 objc_msgSendSuper 走基类，不依赖方法查询。
 //
-// 历史教训：
-//   - 陷阱：class_getInstanceMethod([view class], hitTest:withEvent:) 在部分 Electron
-//     运行时返回 NULL（"not found"）→ install 失败 → 整条穿透逻辑失效。
-//   - 修法①：改从 [NSView class] 取——仍偶发 NULL（原因未明，见 koala_native.log 诊断）。
-//   - 修法②（当前）：彻底不用 class_getInstanceMethod/method_getImplementation，
-//     命中实体像素时用 objc_msgSendSuper 直接走 [NSView class] 的实现。父类方法必然存在，
-//     不依赖任何"取方法"查询，最稳。
+// 坐标说明：
+//   - 视图 hitTest:withEvent: 的 point 是视图本地坐标（原点左下）；
+//   - 窗口 hitTest: 的 point 是窗口 base 坐标（原点左下）；
+//   - 掩膜是「窗口内左上原点」的 0/1 数据。统一换算：
+//       localPoint → 视图本地(左下) → pty = bounds.height - localPoint.y（距左上）
+//       mask_x = localPoint.x - left，mask_y = pty - top
 
 #include <node_api.h>
 #include <Cocoa/Cocoa.h>
@@ -31,16 +33,19 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 
-static void* g_view = NULL;          // 已安装 hitTest 重写的 NSView
-static Class g_subCls = NULL;        // 动态创建的子类 KoalaHitView
+static NSView* g_view = NULL;          // 已注入的内容视图
+static NSWindow* g_win = NULL;         // 已注入的窗口
+static Class g_subCls = NULL;          // KoalaHitView（内容视图子类）
+static Class g_winCls = NULL;          // KoalaHitWindow（窗口子类）
 
 static int g_left = 0, g_top = 0, g_w = 0, g_h = 0;
 static uint8_t* g_mask = NULL;
 static size_t g_maskLen = 0;
 static bool g_enabled = false;
 
-// 原生侧诊断日志：写到 ~/koala_native.log（与主进程 ~/koala_startup.log 互补）
+// 原生侧诊断日志：写到 ~/koala_native.log
 static void nlog(const char* fmt, ...) {
   char buf[1024];
   va_list ap;
@@ -55,39 +60,58 @@ static void nlog(const char* fmt, ...) {
   if (f) { fprintf(f, "[%ld] %s\n", (long)time(NULL), buf); fclose(f); }
 }
 
-/** 调用 [NSView class] 的 hitTest:withEvent: 原始实现（跳过子类 override）。
- *  objc_msgSendSuper 只查父类 IMP 并跳转，参数寄存器原样传递，无需 IMP 签名处理。 */
+/** 判定「视图本地坐标(左下原点)」是否落在考拉实体像素上。
+ *  未启用掩膜时返回 true（整窗可点）。 */
+static bool koalaPointHit(NSView* cv, NSPoint localPoint) {
+  if (!g_enabled || !g_mask || g_w <= 0 || g_h <= 0) return true;
+  NSRect b = [cv bounds];
+  CGFloat H = b.size.height;
+  CGFloat pty = H - localPoint.y;   // 翻到左上原点，与掩膜一致
+  if (localPoint.x < g_left || localPoint.x > g_left + g_w ||
+      pty < g_top  || pty > g_top + g_h) {
+    return false;
+  }
+  int mx = (int)round(localPoint.x - g_left);
+  int my = (int)round(pty - g_top);
+  return mx >= 0 && my >= 0 && mx < g_w && my < g_h && g_mask[(size_t)my * g_w + mx];
+}
+
+/** 调用 [NSView class] 的 hitTest:withEvent: 原始实现（跳过子类 override）。 */
 static NSView* callSuperHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
   struct objc_super sup = { self, [NSView class] };
   typedef NSView* (*superHitFn)(struct objc_super*, SEL, NSPoint, NSEvent*);
   return ((superHitFn)objc_msgSendSuper)(&sup, _cmd, point, event);
 }
 
+// ── 内容视图级 hitTest:withEvent: ─────────────────────────────
 static NSView* koalaHitTest(id self, SEL _cmd, NSPoint point, NSEvent* event) {
-  bool enabled = g_enabled && g_mask && g_w > 0 && g_h > 0;
-  if (enabled) {
-    NSRect b = [self bounds];
-    CGFloat H = b.size.height;
-    CGFloat pty = H - point.y;   // 翻到左上原点，与掩膜一致
-    // 矩形粗筛：矩形外一定是窗口外圈空白 → 穿透到下层
-    if (point.x < g_left || point.x > g_left + g_w ||
-        pty < g_top  || pty > g_top + g_h) {
-      return nil;
-    }
-    // 矩形内：逐像素查掩膜，只拦截考拉实体像素（alpha 非透明）。
-    // 考拉精灵图是方形、四周大量透明留白——这些透明像素必须穿透到下层，
-    // 否则「考拉附近」会变成一层点不透的透明隔层。
-    int mx = (int)round(point.x - g_left);
-    int my = (int)round(pty - g_top);
-    if (mx >= 0 && my >= 0 && mx < g_w && my < g_h && g_mask[(size_t)my * g_w + mx]) {
-      // 考拉实体像素：走父类原始命中（返回命中的子视图，DOM 收到点击）
-      return callSuperHitTest(self, _cmd, point, event);
-    }
-    // 透明像素：穿透到下层（点考拉旁边的按钮/链接/桌面都有反应）
-    return nil;
+  if (g_enabled && g_mask && g_w > 0 && g_h > 0) {
+    // 透明像素：返回 nil（本视图不响应）。窗口级已拦截穿透，这里主要防漏。
+    if (!koalaPointHit((NSView*)self, point)) return nil;
   }
-  // 未启用掩膜（加载期过渡态）：原样行为，整窗接收事件
+  // 实体像素 / 未启用：走父类原始命中（返回命中的子视图，DOM 收到点击）
   return callSuperHitTest(self, _cmd, point, event);
+}
+
+// ── 窗口级 hitTest: ───────────────────────────────────────────
+// 窗口 hitTest: 的 point 是窗口 base 坐标（原点左下）。
+// 透明像素 → 返回 nil（窗口拒绝事件 → 点击穿透到下层窗口）← 穿透的关键
+// 实体像素 → 返回内容视图的命中结果（事件进入本窗口，DOM 收到点击）
+static NSView* koalaWindowHitTest(id self, SEL _cmd, NSPoint point) {
+  NSWindow* win = (NSWindow*)self;
+  NSView* cv = [win contentView];
+  if (cv) {
+    NSPoint lp = [cv convertPoint:point fromView:nil];   // 窗口坐标 → 视图本地
+    if (koalaPointHit(cv, lp)) {
+      // 实体像素：走内容视图的命中（KoalaHitView → 父类原始命中 → webview）
+      return [cv hitTest:lp];
+    }
+    return nil;   // 透明像素：窗口拒绝，穿透到下层
+  }
+  // 理论上走不到；保险起见走窗口基类原始实现
+  struct objc_super sup = { self, [NSWindow class] };
+  typedef NSView* (*superHitFn)(struct objc_super*, SEL, NSPoint);
+  return ((superHitFn)objc_msgSendSuper)(&sup, _cmd, point);
 }
 
 static napi_value Install(napi_env env, napi_callback_info info) {
@@ -129,15 +153,10 @@ static napi_value Install(napi_env env, napi_callback_info info) {
   }
 
   Class origCls = [view class];
-  // 诊断：确认 NSView 类对象与 hitTest:withEvent: 查询结果（历史偶发 NULL）
-  Class baseCls = NSClassFromString(@"NSView");
-  Method baseM = baseCls ? class_getInstanceMethod(baseCls, @selector(hitTest:withEvent:)) : NULL;
-  nlog("install: viewClass=%s NSClassFromString(NSView)=%p getInstanceMethod(hitTest)=%p",
-       class_getName(origCls), (void*)baseCls, (void*)baseM);
+  Class winCls = [[view window] class];
 
+  // 内容视图子类 KoalaHitView：重写 hitTest:withEvent:
   if (g_subCls == NULL) {
-    // 动态子类：仅重写 hitTest:withEvent:。typeEncoding 硬编码为 NSView 的标准签名
-    // （"@@:@{CGPoint=dd}"），运行时按 IMP 直接调用不受影响。
     g_subCls = objc_allocateClassPair(origCls, "KoalaHitView", 0);
     if (!g_subCls) {
       napi_throw_error(env, NULL, "install: objc_allocateClassPair failed");
@@ -146,15 +165,37 @@ static napi_value Install(napi_env env, napi_callback_info info) {
     class_addMethod(g_subCls, @selector(hitTest:withEvent:),
                     (IMP)koalaHitTest, "@@:@{CGPoint=dd}");
     objc_registerClassPair(g_subCls);
-    nlog("install: KoalaHitView 子类已注册 (parent=%s)", class_getName(origCls));
+    nlog("install: KoalaHitView 已注册 (parent=%s)", class_getName(origCls));
   }
 
-  // 仅把本实例的类切到子类（不影响其它窗口）
+  // 窗口子类 KoalaHitWindow：重写 hitTest:（透明像素穿透的关键）
+  NSWindow* win = [view window];
+  if (win) {
+    if (g_winCls == NULL) {
+      g_winCls = objc_allocateClassPair([win class], "KoalaHitWindow", 0);
+      if (g_winCls) {
+        class_addMethod(g_winCls, @selector(hitTest:),
+                        (IMP)koalaWindowHitTest, "@@:{CGPoint=dd}");
+        objc_registerClassPair(g_winCls);
+        nlog("install: KoalaHitWindow 已注册 (parent=%s)", class_getName(winCls));
+      }
+    }
+    if (g_winCls && object_getClass(win) != g_winCls) {
+      object_setClass(win, g_winCls);
+      g_win = win;
+      nlog("install: 窗口 %p 已切换到 KoalaHitWindow", (void*)win);
+    }
+  } else {
+    nlog("install: 警告：view 无窗口，跳过窗口级穿透注入");
+  }
+
+  // 仅把本实例的类切到子类（不影响其它窗口/视图）
   if (object_getClass(view) != g_subCls) {
     object_setClass(view, g_subCls);
   }
-  g_view = (__bridge void*)view;
-  nlog("install: OK，已安装到 %p (class=%s)", (void*)view, class_getName(g_subCls));
+  g_view = view;
+  nlog("install: OK，视图 %p 已安装 (class=%s) 窗口级=%d", (void*)view,
+       class_getName(g_subCls), g_win ? 1 : 0);
   return NULL;
 }
 
